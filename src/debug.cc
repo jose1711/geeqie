@@ -20,6 +20,7 @@
 
 #include "debug.h"
 
+#include <sys/resource.h>
 #include <sys/time.h>
 
 #include <cstdarg>
@@ -27,8 +28,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-
-#include <config.h>
+#include <iostream>
+#include <regex>
 
 #if HAVE_EXECINFO_H
 #  include <execinfo.h>
@@ -169,7 +170,7 @@ gint get_debug_level()
 
 void set_debug_level(gint new_level)
 {
-	debug_level = CLAMP(new_level, DEBUG_LEVEL_MIN, DEBUG_LEVEL_MAX);
+	debug_level = std::clamp(new_level, DEBUG_LEVEL_MIN, DEBUG_LEVEL_MAX);
 }
 
 void debug_level_add(gint delta)
@@ -268,6 +269,38 @@ gchar *get_regexp()
  * The log window F1 command and Edit/Preferences/Behavior/Log Window F1
  * Command may be used to open an editor at a backtrace location.
  */
+
+static std::string extract_function_name(const std::string &input)
+{
+	/* String may be of style:
+	 * (anonymous namespace)::osd_tag_button_new((anonymous namespace)::OsdTag const&, _GtkWidget*) at \
+	 *  /home/<project src>/build/../src/osd.cc:137
+	 * or:
+	 * osd_new(int, _GtkWidget*) at /home/<project src>/build/../src/osd.cc:319 (discriminator 1)
+	 *
+	 * Only the function name is required
+	 */
+
+	/* Strip everything after " at "
+	 */
+	size_t at_pos = input.find(" at ");
+	std::string lhs = (at_pos == std::string::npos) ? input : input.substr(0, at_pos);
+
+	/* Regex to match: optional namespaces + function name + '('
+	 * e.g.  (anonymous namespace)::osd_tag_button_new(
+	 *        osd_new(
+	 */
+	std::regex re(R"((?:[\w\(\) ]+::)*(\w+)\s*\()");
+	std::smatch m;
+
+	if (std::regex_search(lhs, m, re))
+		{
+		return m[1].str();   // capture group 1 = function name only
+		}
+
+	return "";
+}
+
 void log_print_backtrace(const gchar *file, gint line, const gchar *function)
 {
 	FILE *fp;
@@ -285,7 +318,7 @@ void log_print_backtrace(const gchar *file, gint line, const gchar *function)
 		bt_size = backtrace(bt, 1024);
 		bt_syms = backtrace_symbols(bt, bt_size);
 
-		log_printf("Backtrace start");
+		log_printf("\nBacktrace start");
 		log_printf("%s/../%s:%d %s\n", exe_path, file, line, function);
 
 		/* Last item is always "??:?", so ignore it */
@@ -317,7 +350,66 @@ void log_print_backtrace(const gchar *file, gint line, const gchar *function)
 						gchar *paren = g_strstr_len(path, path_len, "(");
 						g_autofree gchar *function_name = paren ? g_strndup(path, paren - path) : g_strdup("");
 
-						log_printf("%s %s", g_strstr_len(path, -1, "at ") + 3, function_name);
+						log_printf("\n%s", g_strstr_len(path, -1, "at ") + 3);
+						log_printf("%s", extract_function_name(path).c_str());
+
+						std::string line = path;
+
+						size_t at_pos = line.find("at ");
+						if (at_pos != std::string::npos)
+							{
+							at_pos += 3; // move past "at "
+
+							size_t end_pos = line.find(' ', at_pos);
+							if (end_pos == std::string::npos)
+								end_pos = line.length();
+
+							std::string extracted = line.substr(at_pos, end_pos - at_pos);
+
+							// Step 1: Split into path and line number
+							size_t colon_pos = extracted.rfind(':');
+							if (colon_pos == std::string::npos)
+								{
+								std::cerr << _("Invalid input format\n");
+								return ;
+								}
+
+							std::string path = extracted.substr(0, colon_pos);
+							int line_number = std::stoi(extracted.substr(colon_pos + 1));
+
+							// Step 2: Open the file
+							std::ifstream file(path);
+							if (!file)
+								{
+								std::cerr << _("Failed to open file: ") << path << "\n";
+								return ;
+								}
+
+							// Step 3: Read all lines
+							std::vector<std::string> lines;
+							std::string line;
+							while (std::getline(file, line))
+								{
+								lines.push_back(line);
+								}
+
+							// Step 4: Print 4 lines before and after the target line
+							int start = std::max(0, line_number - 5); // line_number is 1-based
+							int end = std::min(static_cast<int>(lines.size()), line_number + 4);
+
+							for (int i = start; i < end; ++i)
+								{
+								// Highlight the target line
+								if (i == line_number - 1)
+									{
+									log_printf(">%d | %s", i + 1, lines[i].c_str());
+									}
+								else
+									{
+									log_printf(" %d | %s", i + 1, lines[i].c_str());
+									}
+								}
+							}
 						}
 					}
 
@@ -354,6 +446,23 @@ void log_print_file_data_dump(const gchar *file, gint line, const gchar *functio
 	file_data_dump();
 
 	log_printf("FileData dump end");
+}
+
+/**
+ * @brief Print memory usage and runtime
+ * @param file
+ * @param line
+ * @param function
+ *
+ */
+void log_print_ru(const gchar *file, gint line, const gchar *function)
+{
+	struct rusage r_usage;
+
+	getrusage(RUSAGE_SELF,&r_usage);
+
+	log_printf("%s:%s:%d kB:%ld", file, function, line, r_usage.ru_maxrss);
+	log_printf("%s:%s:%d secs:%ld", file, function, line, r_usage.ru_utime.tv_sec);
 }
 
 #endif /* DEBUG */

@@ -10,8 +10,8 @@ You can run all enabled suites using:
 meson test -C build
 ```
 
-Three test suites exist: `functional`, `unit`, and `analysis`.  You can pick out
-particular suites to execute with commands like:
+Four test suites exist: `functional`, `unit`, `analysis`, and `filedata`.  You
+can pick out particular suites to execute with commands like:
 
 ```text
 meson test -C build --suite functional
@@ -83,14 +83,33 @@ meson setup -C build -D unit_test=enabled
 This tests that Geeqie can successfully open and provide metadata info about a
 library of images of different types.
 
-See `scripts/image-test.py` for more details.
+See `build-aux/image-test.py` for more details.
+
+### FileData refcount test
+
+The refcount test is a variation of the image tests that also requires verbose
+FD debugging to be enabled.  You can set that up with:
+
+```text
+meson setup -C build --debug -D unit_test=enabled -D fd_verbose_debug=enabled
+```
+
+Note that with `fd_verbose_debug` enabled, Geeqie will _always_ perform verbose
+diagnostics at exit.  This is not appropriate for non-development-oriented
+builds.
+
+This test attempts some directory changing patterns that may trigger Geeqie
+refcount bugs, and then runs verbose debugging on exit.  It does not currently
+automatically detect leaked FileData objects.
+
+See `build-aux/fd-refcount-test.py` for more details.
 
 ### Lua tests
 
 Verifies that Geeqie can successfully run lua scripts by opening a stock test
 image and running a variety of lua operations on it.
 
-See `scripts/lua-test.sh` for more details.
+See `build-aux/lua-test.sh` for more details.
 
 ## Static Analysis
 
@@ -107,42 +126,42 @@ for more details.
 
 Checks for single-value enums.
 
-See `scripts/enum-check.sh` for more details.
+See `build-aux/enum-check.sh` for more details.
 
 ### Debug statement checks
 
 Checks for `DEBUG_0`, `DEBUG_BT`, or `DEBUG_FD` statements in the source tree.
 
-See `scripts/debug-check.sh` for more details.
+See `build-aux/debug-check.sh` for more details.
 
 ### Temporary comment checks
 
 Checks for comments starting with `//~` in the source tree.
 
-See `scripts/temporary-comments-check.sh` for more details.
+See `build-aux/temporary-comments-check.sh` for more details.
 
 ### GTK4 migration regression checks
 
 Checks that gtk functions for which there is a Geeqie GTK4 compatibility
 function have a `gq_` prefix.
 
-See `scripts/gtk4-migration-regression-check.sh` for more details.
+See `build-aux/gtk4-migration-regression-check.sh` for more details.
 
 ### Untranslated text checks
 
 Checks for strings that haven't been marked for translation (starting with `_(`)
 in the source tree.
 
-See `scripts/untranslated-text.sh` for more details.
+See `build-aux/untranslated-text.sh` for more details.
 
 ### Ancillary files checks
 
 Performs validation of non-source files within the project.  This includes
-linting of `appdata` files, `desktop` files, Markdown files, GTK UI builder
+linting of `appstream` files, `desktop` files, Markdown files, GTK UI builder
 files and shell scripts, all options are in the bash completions file,
 as well as ensuring that all relevant build options
 are covered in the functional test configuration.
 
 These checks also require `xvfb` for the GTK UI builder validator to run.
 
-See `scripts/test-ancillary-files.sh` for more details.
+See `build-aux/test-ancillary-files.sh` for more details.

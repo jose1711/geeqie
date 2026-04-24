@@ -40,7 +40,6 @@
 #include "main.h"
 #include "options.h"
 #include "thumb-standard.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 
 
@@ -80,7 +79,10 @@ GList *FileData::FileList::filter_out_sidecars(GList *flist)
  * @param filepath Full path to file
  * @returns
  *
- * Takes into account the contents of a .hidden file.
+ * Takes into account the contents of a .hidden file
+ * unless the dot_prefix_hidden_files override is selected,
+ * in which case only the file dot_prefix is checked.
+ *
  * The Preferences/File Filters/Show Hidden Files Or Folders
  * option will ultimately determine if the file is displayed.
  */
@@ -89,6 +91,29 @@ gboolean FileData::FileList::is_hidden_file(const gchar *filepath)
 	GFile *file;
 	GFileInfo *info;
 	gboolean res = FALSE;
+
+	if (filepath == nullptr)
+		{
+		return FALSE;
+		}
+
+	if (options->file_filter.dot_prefix_hidden_files)
+		{
+		const gchar *base = strrchr(filepath, G_DIR_SEPARATOR);
+		base = base ? base + 1 : filepath;
+
+		if (base[0] != '.')
+			{
+			return FALSE;
+			}
+
+		if (base[1] == '\0' || (base[1] == '.' && base[2] == '\0'))
+			{
+			return FALSE;
+			}
+
+		return TRUE;
+		}
 
 	file = g_file_new_for_path(filepath);
 	info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN, G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
@@ -306,15 +331,9 @@ gint FileData::FileList::sort_file_cb(gconstpointer a, gconstpointer b, gpointer
                 static_cast<SortSettings *>(data));
 }
 
-GList *FileData::FileList::sort_full(GList *list, SortType method, gboolean ascending, gboolean case_sensitive, GCompareDataFunc cb)
+GList *FileData::FileList::sort(GList *list, SortSettings settings)
 {
-	SortSettings settings = {method, ascending, case_sensitive};
-	return g_list_sort_with_data(list, cb, &settings);
-}
-
-GList *FileData::FileList::sort(GList *list, SortType method, gboolean ascending, gboolean case_sensitive)
-{
-	return sort_full(list, method, ascending, case_sensitive, sort_file_cb);
+	return g_list_sort_with_data(list, sort_file_cb, &settings);
 }
 
 gboolean FileData::FileList::read_list(FileData *dir_fd, GList **files, GList **dirs)
@@ -394,6 +413,17 @@ GList *FileData::FileList::to_path_list(GList *list)
 	return g_list_reverse(new_list);
 }
 
+bool FileData::FileList::has_dir(GList *list)
+{
+	static const auto fd_path_is_dir = [](gconstpointer data, gconstpointer)
+	{
+		const auto *fd = static_cast<const FileData *>(data);
+		return isdir(fd->path) ? 0 : 1;
+	};
+
+	return g_list_find_custom(list, nullptr, fd_path_is_dir) != nullptr;
+}
+
 GList *FileData::FileList::filter(GList *list, gboolean is_dir_list)
 {
 	GList *work;
@@ -466,7 +496,7 @@ void FileData::FileList::recursive_append(GList **list, GList *dirs)
 		}
 }
 
-void FileData::FileList::recursive_append_full(GList **list, GList *dirs, SortType method, gboolean ascend, gboolean case_sensitive)
+void FileData::FileList::recursive_append_full(GList **list, GList *dirs, SortSettings settings)
 {
 	GList *work;
 
@@ -480,12 +510,12 @@ void FileData::FileList::recursive_append_full(GList **list, GList *dirs, SortTy
 		if (read_list(fd, &f, &d))
 			{
 			f = filter(f, FALSE);
-			f = sort_full(f, method, ascend, case_sensitive, sort_file_cb);
+			f = sort(f, settings);
 			*list = g_list_concat(*list, f);
 
 			d = filter(d, TRUE);
 			d = sort_path(d);
-			recursive_append_full(list, d, method, ascend, case_sensitive);
+			recursive_append_full(list, d, settings);
 			free_list(d);
 			}
 
@@ -510,18 +540,18 @@ GList *FileData::FileList::recursive(FileData *dir_fd)
 	return list;
 }
 
-GList *FileData::FileList::recursive_full(FileData *dir_fd, SortType method, gboolean ascend, gboolean case_sensitive)
+GList *FileData::FileList::recursive_full(FileData *dir_fd, SortSettings settings)
 {
 	GList *list;
 	GList *d;
 
 	if (!read_list(dir_fd, &list, &d)) return nullptr;
 	list = filter(list, FALSE);
-	list = sort_full(list, method, ascend, case_sensitive, sort_file_cb);
+	list = sort(list, settings);
 
 	d = filter(d, TRUE);
 	d = sort_path(d);
-	recursive_append_full(&list, d, method, ascend, case_sensitive);
+	recursive_append_full(&list, d, settings);
 	free_list(d);
 
 	return list;

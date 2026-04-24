@@ -26,7 +26,6 @@
 #include <exception>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <config.h>
@@ -39,9 +38,9 @@
 
 #include "filedata.h"
 #include "filefilter.h"
+#include "metadata.h"
 #include "misc.h"
 #include "options.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 
 struct ExifItem;
@@ -93,16 +92,13 @@ static constexpr AltKey alt_keys[] = {
 	};
 
 #ifdef DEBUG
-static void _debug_exception(const char* file,
-                             int line,
-                             const char* func,
-                             Exiv2::AnyError& e)
+static void debug_exception_impl(const char* file, int line, const char* func, Exiv2::AnyError& e)
 {
 	g_autofree gchar *str = g_locale_from_utf8(e.what(), -1, nullptr, nullptr, nullptr);
 	DEBUG_1("%s:%d:%s:Exiv2: %s", file, line, func, str);
 }
 
-#  define debug_exception(e) _debug_exception(__FILE__, __LINE__, __func__, e)
+#  define debug_exception(e) debug_exception_impl(__FILE__, __LINE__, __func__, e)
 #else
 #  define debug_exception(e)
 #endif
@@ -137,7 +133,7 @@ struct ExifData
 
 	virtual guchar *get_jpeg_color_profile(guint *data_len) = 0;
 
-	virtual std::string image_comment() const = 0;
+	[[nodiscard]] virtual std::string image_comment() const = 0;
 
 	virtual void set_image_comment(const std::string& comment) = 0;
 };
@@ -249,7 +245,7 @@ public:
 		return nullptr;
 	}
 
-	std::string image_comment() const override
+	[[nodiscard]] std::string image_comment() const override
 	{
 		return image_.get() ? image_->comment() : "";
 	}
@@ -261,7 +257,10 @@ public:
 	}
 };
 
-static void _ExifDataProcessed_update_xmp(gpointer key, gpointer value, gpointer data);
+static void ExifDataProcessed_update_xmp(gpointer key, gpointer value, gpointer data)
+{
+	exif_update_metadata(static_cast<ExifData *>(data), static_cast<gchar *>(key), static_cast<GList *>(value));
+}
 
 // This allows read-write access to the metadata
 struct ExifDataProcessed : public ExifData
@@ -301,7 +300,7 @@ public:
 			}
 		if (modified_xmp)
 			{
-			g_hash_table_foreach(modified_xmp, _ExifDataProcessed_update_xmp, this);
+			g_hash_table_foreach(modified_xmp, ExifDataProcessed_update_xmp, this);
 			}
 	}
 
@@ -378,7 +377,7 @@ public:
 		return imageData_->get_jpeg_color_profile(data_len);
 	}
 
-	std::string image_comment() const override
+	[[nodiscard]] std::string image_comment() const override
 	{
 		return imageData_->image_comment();
 	}
@@ -408,11 +407,6 @@ void exif_init()
 }
 
 
-
-static void _ExifDataProcessed_update_xmp(gpointer key, gpointer value, gpointer data)
-{
-	exif_update_metadata(static_cast<ExifData *>(data), static_cast<gchar *>(key), static_cast<GList *>(value));
-}
 
 ExifData *exif_read(gchar *path, gchar *sidecar_path, GHashTable *modified_xmp)
 {
@@ -625,50 +619,15 @@ char *exif_item_get_description(ExifItem *item)
 	}
 }
 
-/*
-invalidTypeId, unsignedByte, asciiString, unsignedShort,
-  unsignedLong, unsignedRational, signedByte, undefined,
-  signedShort, signedLong, signedRational, string,
-  date, time, comment, directory,
-  xmpText, xmpAlt, xmpBag, xmpSeq,
-  langAlt, lastTypeId
-*/
-
-static guint format_id_trans_tbl [] = {
-	EXIF_FORMAT_UNKNOWN,
-	EXIF_FORMAT_BYTE_UNSIGNED,
-	EXIF_FORMAT_STRING,
-	EXIF_FORMAT_SHORT_UNSIGNED,
-	EXIF_FORMAT_LONG_UNSIGNED,
-	EXIF_FORMAT_RATIONAL_UNSIGNED,
-	EXIF_FORMAT_BYTE,
-	EXIF_FORMAT_UNDEFINED,
-	EXIF_FORMAT_SHORT,
-	EXIF_FORMAT_LONG,
-	EXIF_FORMAT_RATIONAL,
-	EXIF_FORMAT_STRING,
-	EXIF_FORMAT_STRING,
-	EXIF_FORMAT_STRING,
-	EXIF_FORMAT_UNDEFINED,
-	EXIF_FORMAT_STRING,
-	EXIF_FORMAT_STRING,
-	EXIF_FORMAT_STRING,
-	EXIF_FORMAT_STRING
-	};
-
-
-
-guint exif_item_get_format_id(ExifItem *item)
+static Exiv2::TypeId exif_item_get_type_id(ExifItem *item)
 {
 	try {
-		if (!item) return EXIF_FORMAT_UNKNOWN;
-		guint id = (reinterpret_cast<Exiv2::Metadatum *>(item))->typeId();
-		if (id >= G_N_ELEMENTS(format_id_trans_tbl)) return EXIF_FORMAT_UNKNOWN;
-		return format_id_trans_tbl[id];
+		if (!item) return Exiv2::invalidTypeId;
+		return (reinterpret_cast<Exiv2::Metadatum *>(item))->typeId();
 	}
-	catch (Exiv2::AnyError& e) {
+	catch (Exiv2::AnyError &e) {
 		debug_exception(e);
-		return EXIF_FORMAT_UNKNOWN;
+		return Exiv2::invalidTypeId;
 	}
 }
 
@@ -718,25 +677,24 @@ gchar *exif_item_get_string(ExifItem *item, int idx)
 }
 
 
-gint exif_item_get_integer(ExifItem *item, gint *value)
+std::optional<gint> exif_item_get_integer(ExifItem *item)
 {
 	try {
-		if (!item || exif_item_get_elements(item) == 0) return 0;
+		if (!item || exif_item_get_elements(item) == 0) return {};
 
 #if EXIV2_TEST_VERSION(0,28,0)
-        *value = ((Exiv2::Metadatum *)item)->toInt64();
+		return ((Exiv2::Metadatum *)item)->toInt64();
 #else
-		*value = (reinterpret_cast<Exiv2::Metadatum *>(item))->toLong();
+		return (reinterpret_cast<Exiv2::Metadatum *>(item))->toLong();
 #endif
-		return 1;
 	}
 	catch (Exiv2::AnyError& e) {
 		debug_exception(e);
-		return 0;
+		return {};
 	}
 }
 
-ExifRational *exif_item_get_rational(ExifItem *item, gint *sign, guint n)
+ExifRational *exif_item_get_rational(ExifItem *item, guint n, bool *sign)
 {
 	try {
 		if (!item) return nullptr;
@@ -967,10 +925,8 @@ GList *exif_get_metadata(ExifData *exif, const gchar *key, MetadataFormat format
 
 	if (format == METADATA_FORMATTED)
 		{
-		gchar *text;
-		gint key_valid;
-		text = exif_get_formatted_by_key(exif, key, &key_valid);
-		if (key_valid) return g_list_append(nullptr, text);
+		auto text = exif_get_formatted_by_key(exif, key);
+		if (text) return g_list_append(nullptr, text.value());
 		}
 
 	list = exif_get_metadata_simple(exif, key, format);
@@ -997,7 +953,10 @@ guchar *exif_get_color_profile(ExifData *exif, guint *data_len)
 	if (ret) return ret;
 
 	ExifItem *prof_item = exif_get_item(exif, "Exif.Image.InterColorProfile");
-	if (prof_item && exif_item_get_format_id(prof_item) == EXIF_FORMAT_UNDEFINED)
+	if (!prof_item) return nullptr;
+
+	const Exiv2::TypeId type_id = exif_item_get_type_id(prof_item);
+	if (type_id == Exiv2::undefined || type_id == Exiv2::comment) // comment is stored as undefined
 		ret = reinterpret_cast<guchar *>(exif_item_get_data(prof_item, data_len));
 	return ret;
 }

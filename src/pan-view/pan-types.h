@@ -22,15 +22,19 @@
 #ifndef PAN_VIEW_PAN_TYPES_H
 #define PAN_VIEW_PAN_TYPES_H
 
+#include <list>
+
 #include <gtk/gtk.h>
 
 #include "cache-loader.h"
+#include "gq-color.h"
 #include "filedata.h"
 
 struct FullScreenData;
 struct ImageWindow;
 struct PanViewFilterUi;
 struct PanViewSearchUi;
+struct PixbufRenderer;
 struct ThumbLoader;
 
 /* thumbnail sizes and spacing */
@@ -40,31 +44,29 @@ struct ThumbLoader;
 #define PAN_THUMB_SIZE_SMALL 64
 #define PAN_THUMB_SIZE_NORMAL 128
 #define PAN_THUMB_SIZE_LARGE 256
-#define PAN_THUMB_SIZE pw->thumb_size
 
 #define PAN_THUMB_GAP_DOTS 2
 #define PAN_THUMB_GAP_SMALL 14
 #define PAN_THUMB_GAP_NORMAL 30
 #define PAN_THUMB_GAP_LARGE 40
 #define PAN_THUMB_GAP_HUGE 50
-#define PAN_THUMB_GAP pw->thumb_gap
 
 /* basic sizes, colors, spacings */
 
 #define PAN_SHADOW_OFFSET 6
 #define PAN_SHADOW_FADE 5
-#define PAN_SHADOW_COLOR 0, 0, 0
-#define PAN_SHADOW_ALPHA 64
+#define PAN_SHADOW_RGB 0, 0, 0
+inline constexpr guint8 PAN_SHADOW_ALPHA = 64;
+inline constexpr GqColor PAN_SHADOW_COLOR{ PAN_SHADOW_RGB, PAN_SHADOW_ALPHA };
 
-#define PAN_BOX_COLOR 255, 255, 255
-#define PAN_BOX_ALPHA 100
+inline constexpr GqColor PAN_BOX_COLOR{ 255, 255, 255, 100 };
 #define PAN_BOX_BORDER 20
 
 #define PAN_BOX_OUTLINE_THICKNESS 4
-#define PAN_BOX_OUTLINE_COLOR 0, 0, 0
-#define PAN_BOX_OUTLINE_ALPHA 128
+inline constexpr GqColor PAN_BOX_OUTLINE_COLOR{ 0, 0, 0, 128 };
 
-#define PAN_TEXT_COLOR 0, 0, 0
+inline constexpr gint PAN_TEXT_BORDER = 4;
+inline constexpr GqColor PAN_TEXT_COLOR{ 0, 0, 0, 255 };
 
 
 enum PanLayoutType {
@@ -91,7 +93,7 @@ enum PanImageSize {
 };
 
 enum PanItemType {
-	PAN_ITEM_NONE,
+	PAN_ITEM_ANY,
 	PAN_ITEM_THUMB,
 	PAN_ITEM_BOX,
 	PAN_ITEM_TRIANGLE,
@@ -99,59 +101,49 @@ enum PanItemType {
 	PAN_ITEM_IMAGE
 };
 
-enum PanTextAttrType {
-	PAN_TEXT_ATTR_NONE = 0,
-	PAN_TEXT_ATTR_BOLD = 1 << 0,
-	PAN_TEXT_ATTR_HEADING = 1 << 1,
-	PAN_TEXT_ATTR_MARKUP = 1 << 2
+enum class PanKey {
+	None,
+	Day,
+	DayBubble,
+	Dot,
+	Info,
 };
 
-enum PanBorderType {
-	PAN_BORDER_NONE = 0,
-	PAN_BORDER_1 = 1 << 0,
-	PAN_BORDER_2 = 1 << 1,
-	PAN_BORDER_3 = 1 << 2,
-	PAN_BORDER_4 = 1 << 3
-};
-
-#define PAN_BORDER_TOP		PAN_BORDER_1
-#define PAN_BORDER_RIGHT		PAN_BORDER_2
-#define PAN_BORDER_BOTTOM	PAN_BORDER_3
-#define PAN_BORDER_LEFT		PAN_BORDER_4
-
-
-struct PanColor {
-	guint8 r;
-	guint8 g;
-	guint8 b;
-	guint8 a;
-};
 
 struct PanItem {
+	bool is_type(PanItemType type) const;
+	void set_key(PanKey key);
+
+	// Determine sizes
+	void set_size_by_item(const PanItem *pi, gint border);
+	void adjust_size(gint border, gint &w, gint &h) const;
+
+	bool draw(GdkPixbuf *pixbuf, GdkRectangle request_rect,
+	          PanImageSize size, PixbufRenderer *pr) const;
+
 	PanItemType type;
 	gint x;
 	gint y;
 	gint width;
 	gint height;
-	gchar *key;
+	PanKey key;
 
 	FileData *fd;
 
 	GdkPixbuf *pixbuf;
 	gint refcount;
 
-	gchar *text;
-	PanTextAttrType text_attr;
+	GqColor color;
 
-	PanColor color;
-
-	PanColor color2;
 	gint border;
+	GqColor border_color;
 
 	gpointer data;
 
 	gboolean queued;
 };
+
+using PanItemList = std::list<PanItem *>;
 
 struct PanWindow
 {

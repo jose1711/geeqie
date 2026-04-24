@@ -27,13 +27,18 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
+#include "filedata.h"
+#include "main-defines.h"
 
-enum NotifyType : gint;
-
-class FileData;
 struct LayoutWindow;
 struct ThumbLoader;
+
+enum FileViewType : guint {
+	FILEVIEW_LIST,
+	FILEVIEW_ICON,
+
+	FILEVIEW_LAST = FILEVIEW_ICON /**< Keep this up to date! */
+};
 
 struct ViewFile
 {
@@ -60,9 +65,7 @@ struct ViewFile
 
 	FileData *click_fd;
 
-	SortType sort_method;
-	gboolean sort_ascend;
-	gboolean sort_case;
+	FileData::FileList::SortSettings sort;
 
 	/* func list */
 	void (*func_thumb_status)(ViewFile *vf, gdouble val, const gchar *text, gpointer data);
@@ -115,12 +118,13 @@ void vf_refresh_idle(ViewFile *vf);
 
 void vf_thumb_set(ViewFile *vf, gboolean enable);
 void vf_marks_set(ViewFile *vf, gboolean enable);
-void vf_sort_set(ViewFile *vf, SortType type, gboolean ascend, gboolean case_sensitive);
+void vf_sort_set(ViewFile *vf, FileData::FileList::SortSettings settings);
 
 guint vf_marks_get_filter(ViewFile *vf);
 void vf_mark_filter_toggle(ViewFile *vf, gint mark);
 
 guint vf_class_get_filter(ViewFile *vf);
+guint vf_rating_get_filter(ViewFile *vf);
 
 GList *vf_selection_get_one(ViewFile *vf, FileData *fd);
 GList *vf_pop_menu_file_list(ViewFile *vf);
@@ -128,12 +132,12 @@ GtkWidget *vf_pop_menu(ViewFile *vf);
 
 FileData *vf_index_get_data(ViewFile *vf, gint row);
 gint vf_index_by_fd(ViewFile *vf, FileData *in_fd);
-guint vf_count(ViewFile *vf, gint64 *bytes);
+guint vf_count(ViewFile *vf, gint64 *bytes = nullptr);
 GList *vf_get_list(ViewFile *vf);
 
 guint vf_selection_count(ViewFile *vf, gint64 *bytes);
 GList *vf_selection_get_list(ViewFile *vf);
-GList *vf_selection_get_list_by_index(ViewFile *vf);
+std::vector<int> vf_selection_get_list_by_index(const ViewFile *vf);
 void vf_selection_foreach(ViewFile *vf, const ViewFile::SelectionCallback &func);
 
 void vf_select_all(ViewFile *vf);

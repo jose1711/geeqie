@@ -24,12 +24,15 @@
 
 #include <sys/types.h>
 
+#include <cstdio>
 #include <ctime>
 
 #include <gio/gio.h>
 #include <glib.h>
 
 #include <config.h>
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(FILE, fclose)
 
 #ifdef DEBUG
 #define GQ_DEBUG_PATH_UTF8 1
@@ -49,6 +52,7 @@ const gchar *xdg_data_home_get();
 const gchar *xdg_config_home_get();
 const gchar *xdg_cache_home_get();
 const gchar *homedir();
+const gchar *get_desktop_dir();
 const gchar *get_rc_dir();
 const gchar *get_collections_dir();
 const gchar *get_trash_dir();
@@ -76,11 +80,12 @@ gboolean rename_file(const gchar *s, const gchar *t);
 gchar *get_current_dir();
 
 GList *string_list_copy(const GList *list);
-GString *string_list_join(const GList *list, const gchar *sep) G_GNUC_WARN_UNUSED_RESULT;
+[[nodiscard]] GString *string_list_join(const GList *list, const gchar *sep);
 
 gchar *unique_filename(const gchar *path, const gchar *ext, const gchar *divider, gboolean pad);
 
 const gchar *filename_from_path(const gchar *path);
+gchar *remove_trailing_slash(const gchar *path);
 gchar *remove_level_from_path(const gchar *path);
 
 gchar *remove_extension_from_path(const gchar *path);

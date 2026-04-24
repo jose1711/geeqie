@@ -34,7 +34,7 @@ struct ImageLoaderNPY : public ImageLoaderBackend
 public:
 	~ImageLoaderNPY() override;
 
-	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data) override;
+	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data) override;
 	gboolean write(const guchar *buf, gsize &chunk_size, gsize count, GError **error) override;
 	GdkPixbuf *get_pixbuf() override;
 	gchar *get_format_name() override;
@@ -106,29 +106,28 @@ GdkPixbuf *load_npy_to_pixbuf(gchar *buf)
 
 	return pixbuf;
 }
+
 gboolean ImageLoaderNPY::write(const guchar *buf, gsize &chunk_size, gsize count, GError **)
 {
-	GdkPixbuf *pixbuf_tmp;
-
-	pixbuf_tmp = load_npy_to_pixbuf(reinterpret_cast<gchar *>(const_cast<guchar *>(buf)));
+	g_autoptr(GdkPixbuf) pixbuf_tmp = load_npy_to_pixbuf(reinterpret_cast<gchar *>(const_cast<guchar *>(buf)));
 	if (!pixbuf_tmp)
 		{
 		log_printf("Failed to load image from buffer");
 
+		// @fixme
 		return false;
 		return 1;
 		}
 
-	pixbuf = gdk_pixbuf_copy(pixbuf_tmp);
+	pixbuf = gdk_pixbuf_copy(pixbuf_tmp); // A copy of buf is required since it is not owned
 	chunk_size = count;
-	g_object_unref(pixbuf_tmp);
 
 	area_updated_cb(nullptr, 0, 0, gdk_pixbuf_get_width(pixbuf), gdk_pixbuf_get_height(pixbuf), data);
 
 	return TRUE;
 }
 
-void ImageLoaderNPY::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, AreaPreparedCb, gpointer data)
+void ImageLoaderNPY::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, gpointer data)
 {
 	this->area_updated_cb = area_updated_cb;
 	this->data = data;

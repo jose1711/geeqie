@@ -73,7 +73,7 @@ struct ImageLoaderJPEGXL : public ImageLoaderBackend
 public:
 	~ImageLoaderJPEGXL() override;
 
-	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data) override;
+	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data) override;
 	gboolean write(const guchar *buf, gsize &chunk_size, gsize count, GError **error) override;
 	GdkPixbuf *get_pixbuf() override;
 	gchar *get_format_name() override;
@@ -85,11 +85,6 @@ private:
 
 	GdkPixbuf *pixbuf;
 };
-
-void free_buffer(guchar *pixels, gpointer)
-{
-	g_free(pixels);
-}
 
 uint8_t *JxlMemoryToPixels(const uint8_t *next_in, size_t size, size_t &xsize, size_t &ysize, size_t &stride)
 {
@@ -186,7 +181,7 @@ gboolean ImageLoaderJPEGXL::write(const guchar *buf, gsize &chunk_size, gsize co
 
 	if (pixels)
 		{
-		pixbuf = gdk_pixbuf_new_from_data(pixels, GDK_COLORSPACE_RGB, TRUE, 8, xsize, ysize, stride, free_buffer, nullptr);
+		pixbuf = gdk_pixbuf_new_from_data(pixels, GDK_COLORSPACE_RGB, TRUE, 8, xsize, ysize, stride, free_pixels, nullptr);
 
 		area_updated_cb(nullptr, 0, 0, xsize, ysize, data);
 
@@ -197,7 +192,7 @@ gboolean ImageLoaderJPEGXL::write(const guchar *buf, gsize &chunk_size, gsize co
 	return ret;
 }
 
-void ImageLoaderJPEGXL::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, AreaPreparedCb, gpointer data)
+void ImageLoaderJPEGXL::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, gpointer data)
 {
 	this->area_updated_cb = area_updated_cb;
 	this->data = data;

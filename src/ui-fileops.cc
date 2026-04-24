@@ -42,7 +42,6 @@
 #include "layout.h"
 #include "main-defines.h"
 #include "md5-util.h"
-#include "typedefs.h"
 #include "ui-utildlg.h"
 #include "utilops.h"
 
@@ -181,6 +180,13 @@ const gchar *homedir()
 	DEBUG_1("Home directory: %s", home);
 
 	return home;
+}
+
+const gchar *get_desktop_dir()
+{
+	static const gchar *desktop_dir = path_to_utf8(g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP));
+
+	return desktop_dir;
 }
 
 const gchar *xdg_data_home_get()
@@ -382,8 +388,7 @@ gboolean copy_file_attributes(const gchar *s, const gchar *t, gint perms, gint m
 		{
 		/* Ignores chown errors, while still doing chown
 		   (so root still can copy files preserving ownership) */
-		int err = chown(tl, st.st_uid, st.st_gid);
-		(void)err; // @todo Use [[maybe_unused]] since C++17
+		[[maybe_unused]] int err = chown(tl, st.st_uid, st.st_gid);
 
 		if (chmod(tl, st.st_mode) < 0)
 			{
@@ -654,18 +659,26 @@ const gchar *filename_from_path(const gchar *path)
 	return path;
 }
 
+gchar *remove_trailing_slash(const gchar *path)
+{
+	if (!path) return nullptr;
+
+	size_t l = strlen(path);
+	while (l > 1 && path[l - 1] == G_DIR_SEPARATOR) l--;
+
+	return g_strndup(path, l);
+}
+
 gchar *remove_level_from_path(const gchar *path)
 {
-	const gchar *base;
-
 	if (!path) return g_strdup("");
 
-	base = strrchr(path, G_DIR_SEPARATOR);
+	const gchar *base = strrchr(path, G_DIR_SEPARATOR);
+	if (!base) return g_strdup("");
+
 	/* Take account of a file being in the root ( / ) folder - ensure the returned value
 	 * is at least one character long */
-	if (base) return g_strndup(path, (strlen(path)-strlen(base)) == 0 ? 1 : (strlen(path)-strlen(base)));
-
-	return g_strdup("");
+	return g_strndup(path, (path == base) ? 1 : (strlen(path) - strlen(base)));
 }
 
 gboolean file_extension_match(const gchar *path, const gchar *ext)

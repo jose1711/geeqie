@@ -1,0 +1,261 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: geeqie
+title: Geeqie
+base: core24
+adopt-info: geeqie
+
+summary: Lightweight, fast GTK image viewer
+description: |
+  Geeqie is a fast GTK image viewer for browsing large image collections.
+
+# lzo compression results in a larger file size but much faster
+# cold-start time
+compression: lzo
+grade: devel
+confinement: strict
+
+package-repositories:
+  - type: apt
+    url: http://archive.ubuntu.com/ubuntu/
+    suites: [ noble ]
+    components: [ main, universe ]
+    key-id: 790BC7277767219C42C86F933B4FE6ACC0B21F32
+
+apps:
+  geeqie:  # auto-detect (Wayland if available, else X11)
+    command-chain:
+      - bin/fix-platform-order.sh
+      - bin/auto-backend.sh
+      - bin/env-imagemagick.sh
+      - bin/set-xdg-vars.sh
+    command: usr/bin/geeqie
+    extensions: [ gnome ]
+    environment:
+      GIO_USE_NETWORK_MONITOR: netlink
+      GIO_USE_PROXY_RESOLVER: libproxy
+      MAGICK_CONFIGURE_PATH: "$SNAP/etc/ImageMagick-6:$SNAP/usr/share/ImageMagick-6:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6/config-Q16:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6.9.12/config-Q16"
+      MAGICK_CODER_MODULE_PATH: "$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6/modules-Q16/coders:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6.9.12/modules-Q16/coders"
+      MAGICK_HOME: "$SNAP/usr"
+      PATH: "$SNAP/usr/bin:$SNAP/bin:$PATH"
+    plugs:
+      - home
+      - removable-media
+      - gsettings
+      - wayland
+      - x11
+      - opengl
+      - network
+      - desktop
+      - desktop-legacy
+
+  wayland:
+    command-chain:
+      - bin/fix-platform-order.sh
+      - bin/force-wayland.sh
+      - bin/env-imagemagick.sh
+    command: usr/bin/geeqie
+    extensions: [ gnome ]
+    environment:
+      GIO_USE_NETWORK_MONITOR: netlink
+      GIO_USE_PROXY_RESOLVER: libproxy
+      MAGICK_CONFIGURE_PATH: "$SNAP/etc/ImageMagick-6:$SNAP/usr/share/ImageMagick-6:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6/config-Q16:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6.9.12/config-Q16"
+      MAGICK_CODER_MODULE_PATH: "$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6/modules-Q16/coders:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6.9.12/modules-Q16/coders"
+      MAGICK_HOME: "$SNAP/usr"
+      PATH: "$SNAP/usr/bin:$SNAP/bin:$PATH"
+    plugs:
+      - home
+      - removable-media
+      - gsettings
+      - wayland
+      - x11
+      - opengl
+      - network
+      - desktop
+      - desktop-legacy
+
+  x11:
+    command-chain:
+      - bin/fix-platform-order.sh
+      - bin/force-x11.sh
+      - bin/env-imagemagick.sh
+    command: usr/bin/geeqie
+    extensions: [ gnome ]
+    environment:
+      GIO_USE_NETWORK_MONITOR: netlink
+      GIO_USE_PROXY_RESOLVER: libproxy
+      MAGICK_CONFIGURE_PATH: "$SNAP/etc/ImageMagick-6:$SNAP/usr/share/ImageMagick-6:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6/config-Q16:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6.9.12/config-Q16"
+      MAGICK_CODER_MODULE_PATH: "$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6/modules-Q16/coders:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/ImageMagick-6.9.12/modules-Q16/coders"
+      MAGICK_HOME: "$SNAP/usr"
+      PATH: "$SNAP/usr/bin:$SNAP/bin:$PATH"
+    plugs:
+      - home
+      - removable-media
+      - gsettings
+      - wayland
+      - x11
+      - opengl
+      - network
+      - desktop
+      - desktop-legacy
+
+slots:
+  geeqie-dbus:
+    interface: dbus
+    bus: session
+    name: org.geeqie.Geeqie
+
+parts:
+  geeqie:
+    plugin: meson
+    source: .
+    meson-parameters:
+      - --prefix=/usr
+      - --wrap-mode=default
+      - -Ddoxygen=disabled
+      - -Dgit=disabled
+      - -Dhelp_pdf=disabled
+      - -Dpandoc=disabled
+      - -Dunit_tests=disabled
+      - -Dyelp-build=disabled
+    parse-info:
+      - usr/share/metainfo/org.geeqie.Geeqie.metainfo.xml
+    build-environment:
+      - LDFLAGS: -Wl,--as-needed -lzstd
+      - MESON_PACKAGE_CACHE_DIR: $CRAFT_PART_BUILD/meson-packagecache
+    build-packages:
+      - appstream
+      - build-essential
+      - curl
+      - gettext
+      - libarchive-dev
+      - libcfitsio-dev
+      - libchamplain-0.12-dev
+      - libchamplain-gtk-0.12-dev
+      - libclutter-1.0-dev
+      - libclutter-gtk-1.0-dev
+      - libcogl-dev
+      - libdjvulibre-dev
+      - libdw-dev
+      - libffmpegthumbnailer-dev
+      - libfftw3-dev
+      - libgexiv2-dev
+      - libglib2.0-dev
+      - libgspell-1-dev
+      - libgtk-3-dev
+      - libheif-dev
+      - libimath-dev
+      - libjpeg-turbo8-dev
+      # - libjxl-dev            # removed: not available on noble by default
+      - liblcms2-dev
+      - liblua5.3-dev
+      - libomp-dev
+      - libopenexr-dev
+      - libpango1.0-dev
+      - libpng-dev
+      - libpoppler-glib-dev
+      - libraw-dev
+      - libtiff-dev
+      - libunwind-dev
+      - libwebp-dev
+      - libzstd-dev
+      - meson
+      - ninja-build
+      - pkg-config
+    stage-packages:
+      - ca-certificates
+      - glib-networking
+      - libsoup-3.0-0
+      - libproxy1v5
+      - libproxy1-plugin-gsettings
+      - libproxy1-plugin-networkmanager   # optional, but nice to have
+
+      - libchamplain-0.12-0
+      - libchamplain-gtk-0.12-0
+      - libclutter-1.0-0
+      - libclutter-gtk-1.0-0
+      - libcogl20
+      - libdjvulibre21
+      - libexif12
+      - libexiv2-27
+      - libffmpegthumbnailer4v5
+      - libfftw3-double3
+      - libgexiv2-2
+      - libgfortran5
+      - libgspell-1-2
+      - libheif1
+      - libimath-3-1-29
+      - libjpeg-turbo8
+      - liblcms2-2
+      - liblua5.3-0
+      - libopenexr-3-1-30
+      - libpng16-16
+      - libpoppler-glib8
+      - libraw23
+      - libtiff6
+      - libwebp7
+      - shared-mime-info
+
+      # ImageMagick (tools + configs) for scripts
+      - imagemagick-6.q16
+      - imagemagick-6-common
+
+      # LAPACK/BLAS (needed by your env chain)
+      - libblas3
+      - liblapack3
+
+      # Helpers
+      - bc
+      - exiftool
+      - exiftran
+      - exiv2
+      - gphoto2
+      - zenity
+      - yad
+
+    override-prime: |
+      set -eux
+      craftctl default
+
+      # stamp version even if adopt-info is set
+      ver="$(git describe --tags --dirty --always 2>/dev/null || date +'%Y%m%d').edge"
+      craftctl set version="$ver"
+
+      # Compat symlinks for IM6 tools
+      for tool in convert mogrify identify composite compare; do
+        if [ -x "$CRAFT_PRIME/usr/bin/${tool}-im6.q16" ] && [ ! -e "$CRAFT_PRIME/usr/bin/$tool" ]; then
+          ln -s "${tool}-im6.q16" "$CRAFT_PRIME/usr/bin/$tool"
+        fi
+      done
+
+      # Ensure delegates.xml uses in-snap libs
+      f="$CRAFT_PRIME/etc/ImageMagick-6/delegates.xml"
+      [ -f "$f" ] && sed -i 's|/usr/lib/|${SNAP}/usr/lib/|g' "$f"
+
+      # Make BLAS/LAPACK visible at /usr/lib/$arch by creating symlinks
+      arch_dir="$CRAFT_PRIME/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+
+      # Link everything in these subdirs into the arch dir
+      for sub in blas lapack; do
+        d="$arch_dir/$sub"
+        [ -d "$d" ] || continue
+        for f in "$d"/lib*.so*; do
+          [ -e "$f" ] || continue
+          base="$(basename "$f")"
+          dest="$arch_dir/$base"
+          # Remove any existing file/symlink at the destination, then link
+          rm -f "$dest"
+          ln -s "$sub/$base" "$dest"
+        done
+      done
+
+  launcher:
+    plugin: nil
+    source: .
+    override-build: |
+      install -Dm755 snap/local/fix-platform-order.sh "$CRAFT_PART_INSTALL/bin/fix-platform-order.sh"
+      install -Dm755 snap/local/env-imagemagick.sh "$CRAFT_PART_INSTALL/bin/env-imagemagick.sh"
+      install -Dm755 snap/local/auto-backend.sh    "$CRAFT_PART_INSTALL/bin/auto-backend.sh"
+      install -Dm755 snap/local/force-wayland.sh   "$CRAFT_PART_INSTALL/bin/force-wayland.sh"
+      install -Dm755 snap/local/force-x11.sh       "$CRAFT_PART_INSTALL/bin/force-x11.sh"
+      install -Dm755 snap/local/set-xdg-vars.sh "$CRAFT_PART_INSTALL/bin/set-xdg-vars.sh"

@@ -25,8 +25,6 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
-class FileData;
-
 struct GenericDialog
 {
 	GtkWidget *dialog;	/**< window */
@@ -46,25 +44,13 @@ struct GenericDialog
 
 #define GENERIC_DIALOG(gd) ((GenericDialog *)gd)
 
-struct FileDialog
-{
-	GenericDialog gd;
-
-	GtkWidget *entry;
-
-	gint type;
-
-	FileData *source_fd;
-	GList *source_list;
-
-	gchar *dest_path;
-};
-
 GenericDialog *generic_dialog_new(const gchar *title,
 				  const gchar *role,
 				  GtkWidget *parent, gboolean auto_close,
 				  void (*cancel_cb)(GenericDialog *, gpointer), gpointer data);
 void generic_dialog_close(GenericDialog *gd);
+
+void generic_dialog_dummy_cb(GenericDialog *gd, gpointer data);
 
 GtkWidget *generic_dialog_add_button(GenericDialog *gd, const gchar *icon_name, const gchar *text,
 				     void (*func_cb)(GenericDialog *, gpointer), gboolean is_default);
@@ -77,20 +63,6 @@ gboolean generic_dialog_get_alternative_button_order(GtkWidget *widget);
 
 GenericDialog *warning_dialog(const gchar *heading, const gchar *text,
 			      const gchar *icon_name, GtkWidget *parent);
-
-FileDialog *file_dialog_new(const gchar *title,
-			    const gchar *role,
-			    GtkWidget *parent,
-			    void (*cancel_cb)(FileDialog *, gpointer), gpointer data);
-void file_dialog_close(FileDialog *fd);
-
-GtkWidget *file_dialog_add_button(FileDialog *fd, const gchar *stock_id, const gchar *text,
-				  void (*func_cb)(FileDialog *, gpointer), gboolean is_default);
-
-void file_dialog_add_path_widgets(FileDialog *fd, const gchar *default_path, const gchar *path,
-				  const gchar *history_key, const gchar *filter, const gchar *filter_desc);
-
-void file_dialog_sync_history(FileDialog *fd, gboolean dir_only);
 
 gboolean generic_dialog_find_window(const gchar *title, const gchar *role, GdkRectangle &rect);
 void generic_dialog_windows_load_config(const gchar **attribute_names, const gchar **attribute_values);

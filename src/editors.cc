@@ -38,7 +38,6 @@
 #include "main.h"
 #include "options.h"
 #include "pixbuf-util.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 #include "ui-utildlg.h"
 #include "utilops.h"
@@ -152,6 +151,7 @@ static GList *editor_mime_types_to_extensions(gchar **mime_types)
 		{"image/x-MS-bmp",	".bmp"},
 		{"image/x-nef",		".nef"},
 		{"image/x-nikon-nef",	".nef"},
+		{"image/x-nikon-nrw",	".nrw"},
 		{"image/x-panasonic-raw",	".raw"},
 		{"image/x-panasonic-rw2",	".rw2"},
 		{"image/x-pentax-pef",	".pef"},
@@ -340,7 +340,8 @@ gboolean editor_read_desktop_file(const gchar *path)
 
 	g_key_file_free(key_file);
 
-	editor->disabled = g_list_find_custom(options->disabled_plugins, path, reinterpret_cast<GCompareFunc>(g_strcmp0)) ? TRUE : FALSE;
+	editor->disabled = !path || std::any_of(options->disabled_plugins.cbegin(), options->disabled_plugins.cend(),
+	                                        [path](const std::string &plugin){ return plugin == path; });
 
 	gtk_list_store_append(desktop_file_list, &iter);
 	gtk_list_store_set(desktop_file_list, &iter,
@@ -418,7 +419,7 @@ GList *editor_get_desktop_files()
 	const gchar *xdg_data_dirs_env = getenv("XDG_DATA_DIRS");
 	g_autofree gchar *xdg_data_dirs = (xdg_data_dirs_env && *xdg_data_dirs_env) ? path_to_utf8(xdg_data_dirs_env) : g_strdup("/usr/share");
 
-	g_autofree gchar *all_dirs = g_strconcat(get_rc_dir(), ":", gq_appdir, ":", xdg_data_home_get(), ":", xdg_data_dirs, NULL);
+	g_autofree gchar *all_dirs = g_strjoin(":", get_rc_dir(), gq_appdir, xdg_data_home_get(), xdg_data_dirs, NULL);
 
 	g_auto(GStrv) split_dirs = g_strsplit(all_dirs, ":", 0);
 
@@ -503,7 +504,7 @@ static void editor_verbose_window_stop(GenericDialog *, gpointer data)
 	auto ed = static_cast<EditorData *>(data);
 	ed->stopping = TRUE;
 	ed->count = 0;
-	editor_verbose_window_progress(ed, _("stopping..."));
+	editor_verbose_window_progress(ed, _("stopping…"));
 }
 
 static void editor_verbose_window_enable_close(EditorVerboseData *vd)
@@ -546,7 +547,7 @@ static EditorVerboseData *editor_verbose_window(EditorData *ed, const gchar *tex
 	vd->text = gtk_text_view_new();
 	gtk_text_view_set_editable(GTK_TEXT_VIEW(vd->text), FALSE);
 	gtk_widget_set_size_request(vd->text, EDITOR_WINDOW_WIDTH, EDITOR_WINDOW_HEIGHT);
-	gq_gtk_container_add(GTK_WIDGET(scrolled), vd->text);
+	gq_gtk_container_add(scrolled, vd->text);
 	gtk_widget_show(vd->text);
 
 	hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -1060,7 +1061,7 @@ static EditorFlags editor_command_one(const EditorDescription *editor, GList *li
 			{
 			g_autofree gchar *buf = g_strdup_printf(_("Failed to run command:\n%s\n"), editor->file);
 
-			editor_verbose_window_fill(ed->vd, buf, strlen(buf));
+			editor_verbose_window_fill(ed->vd, buf, -1);
 			}
 		else
 			{
@@ -1106,7 +1107,7 @@ static EditorFlags editor_command_next_start(EditorData *ed)
 			if ((ed->flags & EDITOR_FOR_EACH) && fd)
 				editor_verbose_window_progress(ed, fd->path);
 			else
-				editor_verbose_window_progress(ed, _("running..."));
+				editor_verbose_window_progress(ed, _("running…"));
 			}
 		ed->count++;
 
@@ -1116,7 +1117,7 @@ static EditorFlags editor_command_next_start(EditorData *ed)
 			gtk_widget_set_sensitive(ed->vd->button_stop, (ed->list != nullptr) );
 			if ((ed->flags & EDITOR_FOR_EACH) && fd)
 				{
-				editor_verbose_window_fill(ed->vd, fd->path, strlen(fd->path));
+				editor_verbose_window_fill(ed->vd, fd->path, -1);
 				editor_verbose_window_fill(ed->vd, "\n", 1);
 				}
 			}

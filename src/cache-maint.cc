@@ -21,8 +21,6 @@
 
 #include "cache-maint.h"
 
-#include <dirent.h>
-
 #include <cstdlib>
 #include <cstring>
 
@@ -176,7 +174,7 @@ static gboolean cache_maintenance_render_stop_cb(gpointer data)
 {
 	auto *cd = static_cast<CacheOpsData *>(data);
 
-	cache_maintenance_notification(cd->app, _("Creating sim data..."), TRUE);
+	cache_maintenance_notification(cd->app, _("Creating sim data…"), TRUE);
 
 	cache_manager_sim_remote(cd->app, cache_maintenance_path, TRUE, cache_maintenance_sim_stop_cb);
 
@@ -188,7 +186,7 @@ static void cache_maintenance_clean_stop_cb(gpointer data)
 	auto *cm = static_cast<CMData *>(data);
 
 
-	cache_maintenance_notification(cm->app,  _("Creating thumbs..."), TRUE);
+	cache_maintenance_notification(cm->app,  _("Creating thumbs…"), TRUE);
 	cache_manager_render_remote(cm->app, cache_maintenance_path, TRUE, options->thumbnails.cache_into_dirs, cache_maintenance_render_stop_cb);
 }
 
@@ -196,7 +194,7 @@ void cache_maintenance(GtkApplication *app, const gchar *path)
 {
 	cache_maintenance_path = g_strdup(path);
 
-	cache_maintenance_notification(app, _("Cleaning thumbs and sims..."), TRUE);
+	cache_maintenance_notification(app, _("Cleaning thumbs and sims…"), TRUE);
 
 	cache_maintain_home_remote(app, FALSE, FALSE, cache_maintenance_clean_stop_cb);
 }
@@ -207,37 +205,19 @@ void cache_maintenance(GtkApplication *app, const gchar *path)
  *-------------------------------------------------------------------
  */
 
-static gboolean isempty(const gchar *path)
+static bool is_empty_dir(const gchar *path)
 {
-	DIR *dp;
-	struct dirent *dir;
-
 	g_autofree gchar *pathl = path_from_utf8(path);
-	dp = opendir(pathl);
-	if (!dp) return FALSE;
 
-	while ((dir = readdir(dp)) != nullptr)
-		{
-		gchar *name = dir->d_name;
+	g_autoptr(GDir) dir = g_dir_open(pathl, 0, nullptr);
+	if (!dir) return false;
 
-		if (name[0] != '.' || (name[1] != '\0' && (name[1] != '.' || name[2] != '\0')) )
-			{
-			closedir(dp);
-			return FALSE;
-			}
-		}
-
-	closedir(dp);
-	return TRUE;
+	return g_dir_read_name(dir) == nullptr;
 }
 
 static void cache_maintain_home_stop(CMData *cm)
 {
-	if (cm->idle_id)
-		{
-		g_source_remove(cm->idle_id);
-		cm->idle_id = 0;
-		}
+	g_clear_handle_id(&cm->idle_id, g_source_remove);
 
 	if (!cm->remote)
 		{
@@ -346,7 +326,7 @@ static gboolean cache_maintain_home_cb(gpointer data)
 		else
 			{
 			/* must re-check for an empty dir */
-			if (isempty(fd->path) && cm->list->next && !rmdir_utf8(fd->path))
+			if (is_empty_dir(fd->path) && cm->list->next && !rmdir_utf8(fd->path))
 				{
 				log_printf("Unable to delete dir: %s\n", fd->path);
 				}
@@ -369,7 +349,7 @@ static gboolean cache_maintain_home_cb(gpointer data)
 			}
 		else
 			{
-			buf = "...";
+			buf = "…";
 			}
 		gq_gtk_entry_set_text(GTK_ENTRY(cm->entry), buf);
 		}
@@ -403,15 +383,15 @@ static void cache_maintain_home(gboolean metadata, gboolean clear, GtkWidget *pa
 
 	if (metadata)
 		{
-		msg = _("Removing old metadata...");
+		msg = _("Removing old metadata…");
 		}
 	else if (clear)
 		{
-		msg = _("Clearing cached thumbnails...");
+		msg = _("Clearing cached thumbnails…");
 		}
 	else
 		{
-		msg = _("Removing old thumbnails...");
+		msg = _("Removing old thumbnails…");
 		}
 
 	cm->gd = generic_dialog_new(_("Maintenance"),
@@ -789,7 +769,6 @@ static void cache_manager_render_dialog(GtkWidget *widget, const gchar *path)
 {
 	CacheOpsData *cd;
 	GtkWidget *hbox;
-	GtkWidget *label;
 	GtkWidget *button;
 
 	cd = g_new0(CacheOpsData, 1);
@@ -818,10 +797,8 @@ static void cache_manager_render_dialog(GtkWidget *widget, const gchar *path)
 	hbox = pref_box_new(cd->group, FALSE, GTK_ORIENTATION_HORIZONTAL, PREF_PAD_SPACE);
 	pref_label_new(hbox, _("Folder:"));
 
-	label = tab_completion_new(&cd->entry, path, nullptr, nullptr, nullptr, nullptr);
-	tab_completion_add_select_button(cd->entry,_("Select folder") , TRUE);
-	gq_gtk_box_pack_start(GTK_BOX(hbox), label, TRUE, TRUE, 0);
-	gtk_widget_show(label);
+	cd->entry = tab_completion_new(hbox, path);
+	tab_completion_add_select_button(cd->entry, _("Select folder"), TRUE, nullptr, nullptr, nullptr);
 
 	pref_checkbox_new_int(cd->group, _("Include subfolders"), FALSE, &cd->recurse);
 	button = pref_checkbox_new_int(cd->group, _("Store thumbnails local to source images"), FALSE, &cd->local);
@@ -896,11 +873,8 @@ static void cache_manager_standard_clean_done(CacheOpsData *cd)
 		gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(cd->progress), 1.0);
 		gtk_progress_bar_set_text(GTK_PROGRESS_BAR(cd->progress), _("done"));
 		}
-	if (cd->idle_id)
-		{
-		g_source_remove(cd->idle_id);
-		cd->idle_id = 0;
-		}
+
+	g_clear_handle_id(&cd->idle_id, g_source_remove);
 
 	thumb_loader_std_thumb_file_validate_cancel(cd->tl);
 	cd->tl = nullptr;
@@ -991,10 +965,8 @@ static void cache_manager_standard_clean_valid_cb(const gchar *path, gboolean va
 		}
 }
 
-static void cache_manager_standard_clean_start(GenericDialog *, gpointer data)
+static void cache_manager_standard_clean_start(CacheOpsData *cd)
 {
-	auto cd = static_cast<CacheOpsData *>(data);
-
 	if (!cd->remote)
 	{
 		if (cd->list || !gtk_widget_get_sensitive(cd->button_start)) return;
@@ -1003,7 +975,7 @@ static void cache_manager_standard_clean_start(GenericDialog *, gpointer data)
 		gtk_widget_set_sensitive(cd->button_stop, TRUE);
 		gtk_widget_set_sensitive(cd->button_close, FALSE);
 
-		gtk_progress_bar_set_text(GTK_PROGRESS_BAR(cd->progress), _("running..."));
+		gtk_progress_bar_set_text(GTK_PROGRESS_BAR(cd->progress), _("running…"));
 	}
 
 	const auto get_thumbnails_folder_files = [](const gchar *thumb_folder)
@@ -1036,12 +1008,15 @@ static void cache_manager_standard_clean_start(GenericDialog *, gpointer data)
 		}
 }
 
-static void cache_manager_standard_clean_start_cb(GenericDialog *gd, gpointer data)
+static void cache_manager_standard_clean_start_cb(GenericDialog *, gpointer data)
 {
-	cache_manager_standard_clean_start(gd, data);
+	auto *cd = static_cast<CacheOpsData *>(data);
+
+	cache_manager_standard_clean_start(cd);
 }
 
-static void cache_manager_standard_process(GtkWidget *widget, gboolean clear)
+template<gboolean clear>
+static void cache_manager_standard_process(GtkWidget *widget, gpointer)
 {
 	CacheOpsData *cd;
 	const gchar *icon_name;
@@ -1054,12 +1029,12 @@ static void cache_manager_standard_process(GtkWidget *widget, gboolean clear)
 	if (clear)
 		{
 		icon_name = GQ_ICON_DELETE;
-		msg = _("Clearing thumbnails...");
+		msg = _("Clearing thumbnails…");
 		}
 	else
 		{
 		icon_name = GQ_ICON_CLEAR;
-		msg = _("Removing old thumbnails...");
+		msg = _("Removing old thumbnails…");
 		}
 
 	cd->gd = generic_dialog_new(_("Maintenance"),
@@ -1101,17 +1076,7 @@ void cache_manager_standard_process_remote(gboolean clear)
 	cd->idle_id = 0;
 	cd->remote = TRUE;
 
-	cache_manager_standard_clean_start(nullptr, cd);
-}
-
-static void cache_manager_standard_clean_cb(GtkWidget *widget, gpointer)
-{
-	cache_manager_standard_process(widget, FALSE);
-}
-
-static void cache_manager_standard_clear_cb(GtkWidget *widget, gpointer)
-{
-	cache_manager_standard_process(widget, TRUE);
+	cache_manager_standard_clean_start(cd);
 }
 
 
@@ -1121,11 +1086,6 @@ static void cache_manager_main_clean_cb(GtkWidget *widget, gpointer)
 }
 
 
-static void dummy_cancel_cb(GenericDialog *, gpointer)
-{
-	/* no op, only so cancel button appears */
-}
-
 static void cache_manager_main_clear_ok_cb(GenericDialog *, gpointer)
 {
 	cache_maintain_home(FALSE, TRUE, nullptr);
@@ -1133,11 +1093,9 @@ static void cache_manager_main_clear_ok_cb(GenericDialog *, gpointer)
 
 static void cache_manager_main_clear_confirm(GtkWidget *parent)
 {
-	GenericDialog *gd;
-
-	gd = generic_dialog_new(_("Clear cache"),
-				"clear_cache", parent, TRUE,
-				dummy_cancel_cb, nullptr);
+	GenericDialog *gd = generic_dialog_new(_("Clear cache"), "clear_cache",
+	                                       parent, TRUE,
+	                                       generic_dialog_dummy_cb, nullptr);
 	generic_dialog_add_message(gd, GQ_ICON_DIALOG_QUESTION, _("Clear cache"),
 				   _("This will remove all thumbnails and sim. files\nthat have been saved to disk, continue?"), TRUE);
 	generic_dialog_add_button(gd, GQ_ICON_OK, "OK", cache_manager_main_clear_ok_cb, TRUE);
@@ -1421,7 +1379,6 @@ static void cache_manager_sim_load_dialog(GtkWidget *widget, const gchar *path)
 {
 	CacheOpsData *cd;
 	GtkWidget *hbox;
-	GtkWidget *label;
 
 	cd = g_new0(CacheOpsData, 1);
 	cd->remote = FALSE;
@@ -1447,10 +1404,8 @@ static void cache_manager_sim_load_dialog(GtkWidget *widget, const gchar *path)
 	hbox = pref_box_new(cd->group, FALSE, GTK_ORIENTATION_HORIZONTAL, PREF_PAD_SPACE);
 	pref_label_new(hbox, _("Folder:"));
 
-	label = tab_completion_new(&cd->entry, path, nullptr, nullptr, nullptr, nullptr);
-	tab_completion_add_select_button(cd->entry,_("Select folder") , TRUE);
-	gq_gtk_box_pack_start(GTK_BOX(hbox), label, TRUE, TRUE, 0);
-	gtk_widget_show(label);
+	cd->entry = tab_completion_new(hbox, path);
+	tab_completion_add_select_button(cd->entry, _("Select folder"), TRUE, nullptr, nullptr, nullptr);
 
 	pref_line(cd->gd->vbox, PREF_PAD_SPACE);
 	hbox = pref_box_new(cd->gd->vbox, FALSE, GTK_ORIENTATION_HORIZONTAL, PREF_PAD_SPACE);
@@ -1535,7 +1490,6 @@ static void cache_manager_cache_maintenance_load_dialog(GtkWidget *widget, const
 {
 	CacheOpsData *cd;
 	GtkWidget *hbox;
-	GtkWidget *label;
 
 	cd = g_new0(CacheOpsData, 1);
 	cd->remote = FALSE;
@@ -1558,10 +1512,8 @@ static void cache_manager_cache_maintenance_load_dialog(GtkWidget *widget, const
 	hbox = pref_box_new(cd->group, FALSE, GTK_ORIENTATION_HORIZONTAL, PREF_PAD_SPACE);
 	pref_label_new(hbox, _("Folder:"));
 
-	label = tab_completion_new(&cd->entry, path, nullptr, nullptr, nullptr, nullptr);
-	tab_completion_add_select_button(cd->entry,_("Select folder") , TRUE);
-	gq_gtk_box_pack_start(GTK_BOX(hbox), label, TRUE, TRUE, 0);
-	gtk_widget_show(label);
+	cd->entry = tab_completion_new(hbox, path);
+	tab_completion_add_select_button(cd->entry, _("Select folder"), TRUE, nullptr, nullptr, nullptr);
 
 	cd->list = nullptr;
 
@@ -1633,12 +1585,12 @@ void cache_manager_show()
 	table = pref_table_new(group, 2, 2, FALSE, FALSE);
 
 	button = pref_table_button(table, 0, 0, GQ_ICON_CLEAR, _("Clean up"),
-				   G_CALLBACK(cache_manager_standard_clean_cb), cache_manager);
+	                           G_CALLBACK(cache_manager_standard_process<FALSE>), cache_manager);
 	gtk_size_group_add_widget(sizegroup, button);
 	pref_table_label(table, 1, 0, _("Remove orphaned or outdated thumbnails."), GTK_ALIGN_START);
 
 	button = pref_table_button(table, 0, 1, GQ_ICON_DELETE, _("Clear cache"),
-				   G_CALLBACK(cache_manager_standard_clear_cb), cache_manager);
+	                           G_CALLBACK(cache_manager_standard_process<TRUE>), cache_manager);
 	gtk_size_group_add_widget(sizegroup, button);
 	pref_table_label(table, 1, 1, _("Delete all cached thumbnails."), GTK_ALIGN_START);
 

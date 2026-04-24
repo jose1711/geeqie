@@ -22,23 +22,26 @@
 #ifndef PAN_VIEW_PAN_VIEW_H
 #define PAN_VIEW_PAN_VIEW_H
 
+#include <optional>
+
 #include <glib.h>
 
-#include "typedefs.h"
+#include "filedata.h"
+#include "pan-types.h"
 
-class FileData;
-struct PanItem;
-struct PanWindow;
+struct GqSize;
 
 void pan_layout_update(PanWindow *pw);
-GList *pan_layout_intersect(PanWindow *pw, gint x, gint y, gint width, gint height);
+PanItemList pan_layout_intersect(PanWindow *pw, gint x, gint y, gint width, gint height);
 void pan_layout_resize(PanWindow *pw);
 
-GList *pan_cache_sort(GList *list, SortType method, gboolean ascend, gboolean case_sensitive);
-void pan_cache_sync_date(PanWindow *pw, GList *list);
-void pan_cache_get_image_size(PanWindow *pw, const FileData *fd, gint &w, gint &h);
+GList *pan_cache_sync_list(PanWindow *pw, GList *list);
+std::optional<GqSize> pan_cache_get_image_size(PanWindow *pw, const FileData *fd);
 
 void pan_info_update(PanWindow *pw, PanItem *pi);
+
+FileDataList *pan_list_tree(PanWindow *pw, SortType method);
+FileDataList *pan_list_tree_filtered(PanWindow *pw, SortType method);
 
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

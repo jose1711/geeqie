@@ -8,7 +8,7 @@ Package Status:
 [![Packaging status](https://repology.org/badge/tiny-repos/geeqie.svg)](https://repology.org/project/geeqie/versions)
 [![latest packaged version(s)](https://repology.org/badge/latest-versions/geeqie.svg)](https://repology.org/project/geeqie/versions)
 
-## ![Geeqie icon][image_ref_geeqie_png] Geeqie - an image viewer
+## ![][image_ref_geeqie_png] ![](geeqie.png) Geeqie - an image viewer
 
 This is Geeqie, a successor of GQview.
 
@@ -31,10 +31,13 @@ The project website is <https://www.geeqie.org/> and you will find the latest so
 * [Features](#features)
 * [Downloading](#downloading)
 * [AppImages](#appimages)
+* [Snaps](#snaps)
 * [Installation Scripts](#installation-scripts)
 * [Compiling and Installing](#compiling-and-installing)
 * [Notes and changes for the latest release](#notes-and-changes-for-the-latest-release)
 * [Required libraries](#required-libraries)
+* [Translators](#translators)
+* [Windows](#windows)
 
 ### Features
 
@@ -66,7 +69,7 @@ Geeqie is a graphics file viewer. Basic features:
     * output: single image, anaglyph, SBS, mirror, SBS half size (3DTV)
 
 * Viewing raster and vector images, in the following formats:
-    * 3FR ANI ARW AVIF BMP CR2 CR3 CRW CUR DDS DJVU DNG ERF EXR FIT FITS FTS GIF GQV HEIC HEIF ICO JP2 JPE JPEG JPG JPS JXL KDC MEF MOS MPO MRW NEF NPY ORF PBM PDF PEF PGM PNG PNM PPM PSD QIF QTIF RAF RAW RW2 SCR SR2 SRF SVG SVGZ TGA TIF TIFF WEBP XBM XPM.
+    * 3FR ANI ARW AVIF BMP CR2 CR3 CRW CUR DDS DJVU DNG ERF EXR FIT FITS FTS GIF GQV HEIC HEIF ICO JP2 JPE JPEG JPG JPS JXL KDC MEF MOS MPO MRW NEF NPY NRW ORF PBM PDF PEF PGM PNG PNM PPM PSD QIF QTIF RAF RAW RW2 SCR SR2 SRF SVG SVGZ TGA TIF TIFF WEBP XBM XPM.
     * Display images in archive files (.ZIP, .RAR etc.).
     * Animated GIF and WEBP files are supported.
 
@@ -96,7 +99,7 @@ Geeqie is a graphics file viewer. Basic features:
 
 * Maps from [OpenStreetMap](https://www.openstreetmap.org) may be displayed in a side panel. If an image has GPS coordinates embedded, its position will be displayed on the map - if Image Direction is encoded, that will be displayed also. If an image does not have embedded GPS coordinates, it may be dragged-and-dropped onto the map to encode its position.
 
-* Speed of operation can be increased by caching thumbnails and similarity data of images. When Geeqie is run as a stand-alone command line program (`geeqie --cache-maintenance <path>`) these data will be recursively created from the defined start point. This program can be called from `cron` or `anacron` so that cache updating is automatically done at specified intervals.
+* Speed of operation can be increased by caching thumbnails and similarity data of images. When Geeqie is run as a stand-alone command line program (`GQ_CACHE_MAINTENANCE=y geeqie --cache-maintenance=&lt;path&gt;`) these data will be recursively created from the defined start point. This program can be called from `cron` or `anacron` so that cache updating is automatically done at specified intervals.
 
 * Extensible via plugins
 
@@ -112,6 +115,8 @@ Geeqie is available:
 
 * as a [Homebrew](https://formulae.brew.sh/formula/geeqie) or [MacPorts](https://ports.macports.org/port/geeqie) package for macOS.
 
+* as a [Snap](https://snapcraft.io/geeqie) (x86_64 only) from the  [Snapcraft site](https://snapcraft.io) ([Edge channel](https://snapcraft.io/docs/channels)).
+
 * via WSL2 on Windows 11 - see notes below.
 
 ### AppImages
@@ -123,7 +128,7 @@ The minimal version can display jpegs, pngs and some other formats, but does not
 This script file will download to `$HOME/bin` the latest Continuous Build AppImages for you:
 
 ```sh
-wget https://raw.githubusercontent.com/BestImageViewer/geeqie/master/scripts/geeqie-download-appimage.sh
+wget https://raw.githubusercontent.com/BestImageViewer/geeqie/master/tools/geeqie-download-appimage.sh
 chmod +x geeqie-download-appimage.sh
 ```
 
@@ -146,6 +151,41 @@ Assuming you have extracted the AppImage to `$HOME/bin/Geeqie-latest-x86_64-AppI
 ```sh
 mkdir --parents $HOME/.local/share/bash-completion/completions/
 ln --symbolic $HOME/bin/Geeqie-latest-x86_64-AppImage/squashfs-root/usr/local/share/bash-completion/completions/geeqie $HOME/.local/share/bash-completion/completions/geeqie
+```
+
+**Note:**
+
+Calling an extracted AppImage (`./squashfs-root/AppRun`) via a symbolic link does not work. The script `geeqie-download-appimage.sh --extract` will fix the problem for you. Otherwise create an intermediate script e.g.
+
+```sh
+geeqie-symbolic.sh
+#!/bin/sh
+cd ./squashfs-root
+./AppRun
+```
+
+### Snaps
+
+Snaps run in a sandboxed environment which prohibits access to, amongst other areas, hidden folders in the `$HOME` folder.
+
+If you have already run Geeqie with some other installation type and now want to migrate to a Snap, some significant data will not be available. That data is in:
+
+```sh
+$HOME/.config/geeqie (Configuration files)
+$HOME/.local/share/geeqie (Collections and local Metadata)
+```
+
+You may copy this data to the sandboxed area used by Geeqie by running these commands:
+
+```sh
+cp -avr "$HOME/.config/geeqie/." "$HOME/snap/geeqie/common/.config/geeqie/"
+cp -avr "$HOME/.local/share/geeqie/." "$HOME/snap/geeqie/common/.local/share/geeqie/"
+```
+
+Thumbnails and similarity data will also not be available. You must regenerate them or copy them manually from whichever folder they are stored in to a folder under:
+
+```sh
+$HOME/snap/geeqie/common/.cache
 ```
 
 ### Installation scripts
@@ -247,6 +287,10 @@ wget https://raw.githubusercontent.com/BestImageViewer/geeqie/master/geeqie-inst
 chmod +x geeqie-install-debian.sh
 ./geeqie-install-debian.sh --list
 ```
+
+### Translators
+
+Please see file `./TRANSLATORS.md`.
 
 ### Code hackers
 

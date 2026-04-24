@@ -38,10 +38,11 @@
 #include "compat.h"
 #include "dnd.h"
 #include "exif.h"
-#include "glua.h"
+#if HAVE_LUA
+#  include "glua.h"
+#endif
 #include "intl.h"
 #include "metadata.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 #include "ui-misc.h"
 
@@ -115,11 +116,13 @@ void tag_data_add_key_to_template(TagData *td)
 	gtk_widget_grab_focus(td->image_overlay_template_view);
 }
 
+#if !HAVE_GTK4
 void tag_data_add_key_to_selection(TagData *td, GdkDragContext *, GtkSelectionData *selection_data, guint, guint, gpointer)
 {
 	gtk_selection_data_set_text(selection_data, td->key, -1);
 	gtk_widget_grab_focus(td->image_overlay_template_view);
 }
+#endif
 
 void tag_data_free(TagData *td)
 {
@@ -138,8 +141,8 @@ GtkWidget *osd_tag_button_new(const OsdTag &tag, GtkWidget *template_view)
 	g_signal_connect_swapped(G_OBJECT(tag_button), "destroy", G_CALLBACK(tag_data_free), td);
 	gtk_widget_show(tag_button);
 
-	gtk_drag_source_set(tag_button, GDK_BUTTON1_MASK, osd_drag_types.data(), osd_drag_types.size(), GDK_ACTION_COPY);
-	g_signal_connect_swapped(G_OBJECT(tag_button), "drag_data_get", G_CALLBACK(tag_data_add_key_to_selection), td);
+	gq_gtk_drag_source_set(tag_button, GDK_BUTTON1_MASK, osd_drag_types.data(), osd_drag_types.size(), GDK_ACTION_COPY);
+	gq_drag_g_signal_swapped(G_OBJECT(tag_button), "drag_data_get", G_CALLBACK(tag_data_add_key_to_selection), td);
 
 	return tag_button;
 }
@@ -283,14 +286,12 @@ gchar *add_osd_extra(const gchar *data, gchar *extra)
 GtkWidget *osd_new(gint max_cols, GtkWidget *template_view)
 {
 	GtkWidget *vbox;
-	GtkWidget *scrolled;
-	GtkWidget *viewport;
 
 	vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
 	pref_label_new(vbox, _("To include predefined tags in the template, click a button or drag-and-drop"));
 
-	scrolled = gq_gtk_scrolled_window_new(nullptr, nullptr);
+	GtkWidget *scrolled = gq_gtk_scrolled_window_new(nullptr, nullptr);
 	gq_gtk_box_pack_start(GTK_BOX(vbox), scrolled, FALSE, FALSE, 0);
 	gtk_container_set_border_width(GTK_CONTAINER(scrolled), PREF_PAD_BORDER);
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
@@ -298,17 +299,16 @@ GtkWidget *osd_new(gint max_cols, GtkWidget *template_view)
 	gtk_widget_show(scrolled);
 	gtk_widget_set_size_request(scrolled, -1, 140);
 
-	viewport = gtk_viewport_new(nullptr, nullptr);
-	gtk_viewport_set_shadow_type(GTK_VIEWPORT(viewport), GTK_SHADOW_NONE);
-	gq_gtk_container_add(GTK_WIDGET(scrolled), viewport);
+	GtkWidget *viewport = gtk_viewport_new(nullptr, nullptr);
+	gq_gtk_viewport_set_shadow_type(GTK_WIDGET(viewport), GTK_SHADOW_NONE);
+	gq_gtk_container_add(scrolled, viewport);
 	gtk_widget_show(viewport);
 
-	const gint entries = G_N_ELEMENTS(predefined_tags);
+	constexpr gint entries = std::size(predefined_tags);
 	const gint max_rows = ceil(static_cast<gdouble>(entries) / max_cols);
 
-	GtkGrid *grid;
-	grid = GTK_GRID(gtk_grid_new());
-	gq_gtk_container_add(GTK_WIDGET(viewport), GTK_WIDGET(grid));
+	auto *grid = GTK_GRID(gtk_grid_new());
+	gq_gtk_container_add(viewport, GTK_WIDGET(grid));
 	gtk_widget_show(GTK_WIDGET(grid));
 
 	gint i = 0;

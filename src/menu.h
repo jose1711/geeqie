@@ -26,27 +26,20 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
+enum SortType : gint;
 
-gpointer submenu_item_get_data(GtkWidget *menu);
+gpointer submenu_item_get_data(GtkWidget *submenu_item);
 
-GtkWidget *submenu_add_edit(GtkWidget *menu, GtkWidget **menu_item, GCallback func, gpointer data, GList *fd_list);
+GtkWidget *submenu_add_edit(GtkWidget *menu, gboolean sensitive, GList *fd_list, GCallback func, gpointer data);
 
-gchar *sort_type_get_text(SortType method);
 GtkWidget *submenu_add_sort(GtkWidget *menu, GCallback func, gpointer data,
-			    gboolean include_none, gboolean include_path,
-			    gboolean show_current, SortType type);
-GtkWidget *submenu_add_dir_sort(GtkWidget *menu, GCallback func, gpointer data,
-			    gboolean include_none, gboolean include_path,
-			    gboolean show_current, SortType type);
-GtkWidget *submenu_add_zoom(GtkWidget *menu, GCallback func, gpointer data,
-			    gboolean include_none, gboolean include_path,
-			    gboolean show_current, ZoomMode mode);
-gchar *alter_type_get_text(AlterType type);
+                            gboolean show_current, SortType type);
+
 GtkWidget *submenu_add_alter(GtkWidget *menu, GCallback func, gpointer data);
 
-GtkWidget *submenu_add_collections(GtkWidget *menu, GtkWidget **menu_item,
-										GCallback func, gpointer data);
-void pop_menu_collections(GList *selection_list, gpointer data);
+GtkWidget *submenu_add_collections(GtkWidget *menu, gboolean sensitive,
+                                   GCallback func, gpointer data);
+
+void popup_menu_bar(GtkWidget *widget, GCallback expander_height_cb);
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

@@ -28,9 +28,7 @@
 #include "pan-item.h"
 #include "pan-types.h"
 #include "pan-util.h"
-#include "pan-view-filter.h"
 #include "pan-view.h"
-#include "typedefs.h"
 
 namespace
 {
@@ -39,9 +37,8 @@ constexpr gint PAN_GROUP_MAX = 16;
 
 } // namespace
 
-void pan_timeline_compute(PanWindow *pw, FileData *dir_fd, gint &width, gint &height)
+void pan_timeline_compute(PanWindow *pw, gint &width, gint &height)
 {
-	GList *list;
 	GList *work;
 	gint x;
 	gint y;
@@ -55,18 +52,8 @@ void pan_timeline_compute(PanWindow *pw, FileData *dir_fd, gint &width, gint &he
 	gint x_width;
 	gint y_height;
 
-	list = pan_list_tree(dir_fd, SORT_NONE, TRUE, TRUE, pw->ignore_symlinks);
-	pan_filter_fd_list(&list, pw->filter_ui->filter_elements, pw->filter_ui->filter_classes);
-
-	if (pw->cache_list && pw->exif_date_enable)
-		{
-		pw->cache_list = pan_cache_sort(pw->cache_list, SORT_NAME, TRUE, TRUE);
-		list = filelist_sort(list, SORT_NAME, TRUE, TRUE);
-		pan_cache_sync_date(pw, list);
-		}
-
-	pw->cache_list = pan_cache_sort(pw->cache_list, SORT_TIME, TRUE, TRUE);
-	list = filelist_sort(list, SORT_TIME, TRUE, TRUE);
+	g_autoptr(GList) list = pan_list_tree_filtered(pw, SORT_NONE);
+	list = pan_cache_sync_list(pw, list);
 
 	width = PAN_BOX_BORDER * 2;
 	height = PAN_BOX_BORDER * 2;
@@ -112,17 +99,12 @@ void pan_timeline_compute(PanWindow *pw, FileData *dir_fd, gint &width, gint &he
 				y = PAN_BOX_BORDER;
 
 				g_autofree gchar *month_buf = pan_date_value_string(fd->date, PAN_DATE_LENGTH_MONTH);
-				pi = pan_item_text_new(pw, x, y, month_buf,
-						       static_cast<PanTextAttrType>(PAN_TEXT_ATTR_BOLD | PAN_TEXT_ATTR_HEADING),
-						       PAN_BORDER_3,
-						       {PAN_TEXT_COLOR, 255});
+				pi = pan_item_text_new(pw, x, y, month_buf, PAN_TEXT_ATTR_BOLD_HEADING,
+				                       PAN_TEXT_BORDER, PAN_TEXT_COLOR);
 				y += pi->height;
 
-				pi_month = pan_item_box_new(pw, file_data_ref(fd),
-							    x, y, 0, 0,
-							    PAN_BOX_OUTLINE_THICKNESS,
-							    {PAN_BOX_COLOR, PAN_BOX_ALPHA},
-							    {PAN_BOX_OUTLINE_COLOR, PAN_BOX_OUTLINE_ALPHA});
+				pi_month = pan_item_box_new(pw, file_data_ref(fd), x, y, 0, 0, PAN_BOX_COLOR,
+				                            PAN_BOX_OUTLINE_THICKNESS, PAN_BOX_OUTLINE_COLOR);
 
 				x += PAN_BOX_BORDER;
 				y += PAN_BOX_BORDER;
@@ -154,15 +136,12 @@ void pan_timeline_compute(PanWindow *pw, FileData *dir_fd, gint &width, gint &he
 
 			g_autofree gchar *week_buf = pan_date_value_string(fd->date, PAN_DATE_LENGTH_WEEK);
 			pi = pan_item_text_new(pw, x, y, week_buf, PAN_TEXT_ATTR_NONE,
-					       PAN_BORDER_3,
-					       {PAN_TEXT_COLOR, 255});
+			                       PAN_TEXT_BORDER, PAN_TEXT_COLOR);
 
 			y += pi->height;
 
-			pi_day = pan_item_box_new(pw, file_data_ref(fd), x, y, 0, 0,
-						  PAN_BOX_OUTLINE_THICKNESS,
-						  {PAN_BOX_COLOR, PAN_BOX_ALPHA},
-						  {PAN_BOX_OUTLINE_COLOR, PAN_BOX_OUTLINE_ALPHA});
+			pi_day = pan_item_box_new(pw, file_data_ref(fd), x, y, 0, 0, PAN_BOX_COLOR,
+			                          PAN_BOX_OUTLINE_THICKNESS, PAN_BOX_OUTLINE_COLOR);
 
 			x += PAN_BOX_BORDER;
 			y += PAN_BOX_BORDER;
@@ -178,23 +157,23 @@ void pan_timeline_compute(PanWindow *pw, FileData *dir_fd, gint &width, gint &he
 		else
 			{
 			pi = pan_item_thumb_new(pw, fd, x, y);
-			x_width = PAN_THUMB_SIZE;
-			y_height = PAN_THUMB_SIZE;
+			x_width = pw->thumb_size;
+			y_height = pw->thumb_size;
 			}
 
-		pan_item_size_by_item(pi_day, pi, PAN_BOX_BORDER);
-		pan_item_size_by_item(pi_month, pi_day, PAN_BOX_BORDER);
+		if (pi_day) pi_day->set_size_by_item(pi, PAN_BOX_BORDER);
+		if (pi_month) pi_month->set_size_by_item(pi_day, PAN_BOX_BORDER);
 
 		total--;
 		count++;
 
 		if (total > 0 && count < PAN_GROUP_MAX)
 			{
-			y += y_height + PAN_THUMB_GAP;
+			y += y_height + pw->thumb_gap;
 			}
 		else
 			{
-			x += x_width + PAN_THUMB_GAP;
+			x += x_width + pw->thumb_gap;
 			x_width = 0;
 			count = 0;
 
@@ -204,9 +183,7 @@ void pan_timeline_compute(PanWindow *pw, FileData *dir_fd, gint &width, gint &he
 				y = month_start;
 			}
 
-		pan_item_size_coordinates(pi_month, PAN_BOX_BORDER, width, height);
+		if (pi_month) pi_month->adjust_size(PAN_BOX_BORDER, width, height);
 		}
-
-	g_list_free(list);
 }
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

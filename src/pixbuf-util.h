@@ -28,6 +28,8 @@
 #include <pango/pango.h>
 
 class FileData;
+struct GqColor;
+struct GqPoint;
 
 gboolean pixbuf_to_file_as_png (GdkPixbuf *pixbuf, const gchar *filename);
 
@@ -58,6 +60,7 @@ gboolean pixbuf_scale_aspect(gint req_w, gint req_h, gint old_w, gint old_h, gin
 #define PIXBUF_INLINE_ICON_MOVE             "gq-icon-move"
 #define PIXBUF_INLINE_ICON_ORIGINAL         "gq-icon-original"
 #define PIXBUF_INLINE_ICON_PANORAMA         "gq-icon-panorama"
+#define PIXBUF_INLINE_ICON_PLACEHOLDER      "gq-icon-placeholder"
 #define PIXBUF_INLINE_ICON_PDF              "gq-icon-pdf"
 #define PIXBUF_INLINE_ICON_PROPERTIES       "gq-icon-properties"
 #define PIXBUF_INLINE_ICON_RENAME           "gq-icon-rename"
@@ -78,41 +81,35 @@ gboolean pixbuf_scale_aspect(gint req_w, gint req_h, gint old_w, gint old_h, gin
 #define PIXBUF_INLINE_UNKNOWN               "gq-icon-unknown"
 #define PIXBUF_INLINE_VIDEO                 "gq-icon-video"
 
-GdkPixbuf *pixbuf_copy_rotate_90(GdkPixbuf *src, gboolean counter_clockwise);
-GdkPixbuf *pixbuf_copy_mirror(GdkPixbuf *src, gboolean mirror, gboolean flip);
 GdkPixbuf* pixbuf_apply_orientation(GdkPixbuf *pixbuf, gint orientation);
 
-void pixbuf_draw_rect_fill(GdkPixbuf *pb,
-                           GdkRectangle rect,
-                           gint r, gint g, gint b, gint a);
+void pixbuf_draw_rect_fill(GdkPixbuf *pb, GdkRectangle rect, GqColor color);
 
 void pixbuf_set_rect_fill(GdkPixbuf *pb,
-			  gint x, gint y, gint w, gint h,
-			  gint r, gint g, gint b, gint a);
+                          gint x, gint y, gint w, gint h,
+                          GqColor color);
 
 void pixbuf_set_rect(GdkPixbuf *pb,
-		     gint x, gint y, gint w, gint h,
-		     gint r, gint g, gint b, gint a,
-		     gint left_width, gint right_width, gint top_width, gint bottom_width);
+                     gint x, gint y, gint w, gint h,
+                     GqColor color,
+                     gint left_width, gint right_width, gint top_width, gint bottom_width);
 
-void pixbuf_pixel_set(GdkPixbuf *pb, gint x, gint y, gint r, gint g, gint b, gint a);
+void pixbuf_pixel_set(GdkPixbuf *pb, gint x, gint y, GqColor color);
 
 
 void pixbuf_draw_layout(GdkPixbuf *pixbuf, PangoLayout *layout,
-                        gint x, gint y,
-                        guint8 r, guint8 g, guint8 b, guint8 a);
+                        gint x, gint y, GqColor color);
 
 void pixbuf_draw_triangle(GdkPixbuf *pb, GdkRectangle clip,
-                          GdkPoint c1, GdkPoint c2, GdkPoint c3,
-                          guint8 r, guint8 g, guint8 b, guint8 a);
+                          GqPoint c1, GqPoint c2, GqPoint c3,
+                          GqColor color);
 
 void pixbuf_draw_line(GdkPixbuf *pb, GdkRectangle clip,
-                      gint x1, gint y1, gint x2, gint y2,
-                      guint8 r, guint8 g, guint8 b, guint8 a);
+                      GqPoint c1, GqPoint c2, GqColor color);
 
 void pixbuf_draw_shadow(GdkPixbuf *pb, GdkRectangle clip,
-                        gint x, gint y, gint w, gint h, gint border,
-                        guint8 r, guint8 g, guint8 b, guint8 a);
+                        gint x, gint y, gint w, gint h,
+                        gint border, GqColor color);
 
 void pixbuf_desaturate_rect(GdkPixbuf *pb,
 			    gint x, gint y, gint w, gint h);
@@ -125,7 +122,7 @@ void pixbuf_ignore_alpha_rect(GdkPixbuf *pb,
 
 /* clipping utils */
 
-GdkRectangle util_triangle_bounding_box(GdkPoint c1, GdkPoint c2, GdkPoint c3);
+GdkRectangle util_triangle_bounding_box(GqPoint c1, GqPoint c2, GqPoint c3);
 
 
 #endif

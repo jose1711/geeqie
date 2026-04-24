@@ -23,7 +23,7 @@ Menu processing is in `./src/layout-util.cc menu_entries[]`.
 ## File operation overrides
 
 The standard copy, move, rename, delete and folder create functions can
-be overridden by special plugins. The following defines are in `typedefs.h`:
+be overridden by special plugins. The following defines are in `main-defines.h`:
 
 ```c
 #define CMD_COPY     "geeqie-copy-command.desktop"
@@ -35,7 +35,7 @@ be overridden by special plugins. The following defines are in `typedefs.h`:
 
 ## Doxygen Documentation
 
-Complete code documentation in html format can be generated via the script `./scripts/doxygen.sh`.
+Complete code documentation in html format can be generated via the script `./tools/doxygen.sh`.
 
 From the top level generated documentation, `Files / File List / scripts` provides a summary of files that may be useful.
 

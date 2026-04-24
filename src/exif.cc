@@ -63,7 +63,7 @@
 #include "format-raw.h"
 #include "intl.h"
 #include "jpeg-parser.h"
-#include "typedefs.h"
+#include "metadata.h"
 #include "ui-fileops.h"
 
 class FileData;
@@ -146,6 +146,13 @@ static ExifTextList ExifOrientationList[] = {
 	{ EXIF_ORIENTATION_RIGHT_BOTTOM,N_("right bottom") },
 	{ EXIF_ORIENTATION_LEFT_BOTTOM,	N_("left bottom") },
 	EXIF_TEXT_LIST_END
+};
+
+enum ExifUnitType {
+	EXIF_UNIT_UNKNOWN	= 0,
+	EXIF_UNIT_NOUNIT	= 1,
+	EXIF_UNIT_INCH		= 2,
+	EXIF_UNIT_CENTIMETER	= 3
 };
 
 static ExifTextList ExifUnitList[] = {
@@ -592,7 +599,7 @@ gchar *exif_item_get_data(ExifItem *item, guint *data_len)
 #endif
 }
 
-guint exif_item_get_format_id(ExifItem *item)
+static guint exif_item_get_format_id(ExifItem *item)
 {
 	if (!item) return EXIF_FORMAT_UNKNOWN;
 	return item->format;
@@ -1081,13 +1088,11 @@ static gint exif_jpeg_parse(ExifData *exif,
 		return -2;
 		}
 
-	guint seg_offset = 0;
-	guint seg_length = 0;
-	if (jpeg_segment_find(data, size, JPEG_MARKER_APP1,
-	                      "Exif\x00\x00", 6,
-	                      seg_offset, seg_length))
+	constexpr std::string_view magic{ "Exif\x00\x00" };
+	JpegSegment seg;
+	if (jpeg_segment_find(data, size, JPEG_MARKER_APP1, magic, seg))
 		{
-		res = exif_tiff_parse(exif, data + seg_offset + 6, seg_length - 6, list);
+		res = exif_tiff_parse(exif, data + seg.offset + magic.size(), seg.length - magic.size(), list);
 		}
 
 	if (exif_jpeg_parse_color(exif, data, size))
@@ -1433,37 +1438,30 @@ gchar *exif_item_get_data_as_text(ExifItem *item, ExifData *)
 	return exif_item_get_data_as_text_full(item, METADATA_FORMATTED);
 }
 
-gint exif_item_get_integer(ExifItem *item, gint *value)
+std::optional<gint> exif_item_get_integer(ExifItem *item)
 {
-	if (!item) return FALSE;
-	if (!item->elements) return FALSE;
+	if (!item || !item->elements) return {};
 
 	switch (item->format)
 		{
 		case EXIF_FORMAT_SHORT:
-			*value = static_cast<gint>((static_cast<gint16 *>(item->data))[0]);
-			return TRUE;
-			break;
+			return static_cast<gint>((static_cast<gint16 *>(item->data))[0]);
 		case EXIF_FORMAT_SHORT_UNSIGNED:
-			*value = static_cast<gint>((static_cast<guint16 *>(item->data))[0]);
-			return TRUE;
-			break;
+			return static_cast<gint>((static_cast<guint16 *>(item->data))[0]);
 		case EXIF_FORMAT_LONG:
-			*value = static_cast<gint>((static_cast<gint32 *>(item->data))[0]);
-			return TRUE;
-			break;
+			return static_cast<gint>((static_cast<gint32 *>(item->data))[0]);
 		case EXIF_FORMAT_LONG_UNSIGNED: /**< @FIXME overflow possible */
-			*value = static_cast<gint>((static_cast<guint32 *>(item->data))[0]);
-			return TRUE;
+			return static_cast<gint>((static_cast<guint32 *>(item->data))[0]);
 		default:
 			/* all other type return FALSE */
 			break;
 		}
-	return FALSE;
+
+	return {};
 }
 
 
-ExifRational *exif_item_get_rational(ExifItem *item, gint *sign, guint n)
+ExifRational *exif_item_get_rational(ExifItem *item, guint n, bool *sign)
 {
 	if (!item) return nullptr;
 	if (n >= item->elements) return nullptr;
@@ -1514,7 +1512,7 @@ static void exif_write_item(FILE *f, ExifItem *item, ExifData *exif)
 /**
  * @brief Usually for debugging to stdout
  */
-void exif_write_data_list(ExifData *exif, FILE *f, gint human_readable_list)
+void exif_write_data_list(ExifData *exif, FILE *f, bool human_readable_list)
 {
 	if (!f || !exif) return;
 
@@ -1523,20 +1521,13 @@ void exif_write_data_list(ExifData *exif, FILE *f, gint human_readable_list)
 
 	if (human_readable_list)
 		{
-		gint i;
-
-		i = 0;
-		while (ExifFormattedList[i].key)
-			{
-			gchar *text;
-
-			text = exif_get_formatted_by_key(exif, ExifFormattedList[i].key, nullptr);
-			if (text)
-				{
-				g_fprintf(f, "     %9s %30s %s\n", "string", ExifFormattedList[i].key, text);
-				}
-			i++;
-			}
+		static const auto print_formatted = [](gpointer key, gpointer value, gpointer data)
+		{
+			g_fprintf(static_cast<FILE *>(data), "     %9s %30s %s\n",
+			          "string", static_cast<gchar *>(key), static_cast<gchar *>(value));
+		};
+		g_autoptr(GHashTable) formatted = exif_get_formatted(exif);
+		g_hash_table_foreach(formatted, print_formatted, f);
 		}
 	else
 		{
@@ -1586,10 +1577,8 @@ GList *exif_get_metadata(ExifData *exif, const gchar *key, MetadataFormat format
 
 	if (format == METADATA_FORMATTED)
 		{
-		gchar *text;
-		gint key_valid;
-		text = exif_get_formatted_by_key(exif, key, &key_valid);
-		if (key_valid) return g_list_append(nullptr, text);
+		auto text = exif_get_formatted_by_key(exif, key);
+		if (text) return g_list_append(nullptr, text.value());
 		}
 
 	item = exif_get_item(exif, key);

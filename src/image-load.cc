@@ -29,7 +29,7 @@
 
 #include "exif.h"
 #include "filedata.h"
-#include "gq-marshal.h"
+#include "geometry.h"
 #include "image-load-collection.h"
 #include "image-load-dds.h"
 #if HAVE_DJVU
@@ -78,8 +78,8 @@
 #include "jpeg-parser.h"
 #include "misc.h"
 #include "options.h"
+#include "pixbuf-renderer.h"
 #include "pixbuf-util.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 
 struct ExifData;
@@ -97,7 +97,7 @@ enum {
 	SIGNAL_ERROR,
 	SIGNAL_DONE,
 	SIGNAL_PERCENT,
-	SIGNAL_SIZE,
+	SIGNAL_SIZE_PREPARED,
 	SIGNAL_COUNT
 };
 
@@ -177,17 +177,14 @@ static void image_loader_class_init(ImageLoaderClass *loader_class)
 
 
 	signals[SIGNAL_AREA_READY] =
-		g_signal_new("area_ready",
-			     G_OBJECT_CLASS_TYPE(gobject_class),
-			     G_SIGNAL_RUN_LAST,
-			     G_STRUCT_OFFSET(ImageLoaderClass, area_ready),
-			     nullptr, nullptr,
-			     gq_marshal_VOID__INT_INT_INT_INT,
-			     G_TYPE_NONE, 4,
-			     G_TYPE_INT,
-			     G_TYPE_INT,
-			     G_TYPE_INT,
-			     G_TYPE_INT);
+	    g_signal_new("area-ready",
+	                 G_OBJECT_CLASS_TYPE(gobject_class),
+	                 G_SIGNAL_RUN_LAST,
+	                 G_STRUCT_OFFSET(ImageLoaderClass, area_ready),
+	                 nullptr, nullptr,
+	                 g_cclosure_marshal_VOID__BOXED,
+	                 G_TYPE_NONE, 1,
+	                 GDK_TYPE_RECTANGLE);
 
 	signals[SIGNAL_ERROR] =
 		g_signal_new("error",
@@ -217,18 +214,28 @@ static void image_loader_class_init(ImageLoaderClass *loader_class)
 			     G_TYPE_NONE, 1,
 			     G_TYPE_DOUBLE);
 
-	signals[SIGNAL_SIZE] =
-		g_signal_new("size_prepared",
-			     G_OBJECT_CLASS_TYPE(gobject_class),
-			     G_SIGNAL_RUN_LAST,
-			     G_STRUCT_OFFSET(ImageLoaderClass, area_ready),
-			     nullptr, nullptr,
-			     gq_marshal_VOID__INT_INT,
-			     G_TYPE_NONE, 2,
-			     G_TYPE_INT,
-			     G_TYPE_INT);
+	signals[SIGNAL_SIZE_PREPARED] =
+	    g_signal_new("size-prepared",
+	                 G_OBJECT_CLASS_TYPE(gobject_class),
+	                 G_SIGNAL_RUN_LAST,
+	                 G_STRUCT_OFFSET(ImageLoaderClass, size_prepared),
+	                 nullptr, nullptr,
+	                 g_cclosure_marshal_VOID__BOXED,
+	                 G_TYPE_NONE, 1,
+	                 GQ_TYPE_SIZE);
 
 }
+
+#ifdef DEBUG
+static const gchar *image_loader_get_error(ImageLoader *il)
+{
+	if (!il) return nullptr;
+
+	g_autoptr(GMutexLocker) locker = g_mutex_locker_new(il->data_mutex);
+
+	return il->error ? il->error->message : nullptr;
+}
+#endif
 
 static void image_loader_finalize(GObject *object)
 {
@@ -240,11 +247,7 @@ static void image_loader_finalize(GObject *object)
 
 	DEBUG_1("freeing image loader %p bytes_read=%" G_GSIZE_FORMAT, (void *)il, il->bytes_read);
 
-	if (il->idle_done_id)
-		{
-		g_source_remove(il->idle_done_id);
-		il->idle_done_id = 0;
-		}
+	g_clear_handle_id(&il->idle_done_id, g_source_remove);
 
 	while (g_source_remove_by_user_data(il))
 		{
@@ -302,10 +305,7 @@ ImageLoader *image_loader_new(FileData *fd)
 
 struct ImageLoaderAreaParam {
 	ImageLoader *il;
-	guint x;
-	guint y;
-	guint w;
-	guint h;
+	GdkRectangle area;
 };
 
 
@@ -313,20 +313,13 @@ static gboolean image_loader_emit_area_ready_cb(gpointer data)
 {
 	auto par = static_cast<ImageLoaderAreaParam *>(data);
 	ImageLoader *il = par->il;
-	guint x;
-	guint y;
-	guint w;
-	guint h;
 	g_mutex_lock(il->data_mutex);
 	il->area_param_list = g_list_remove(il->area_param_list, par);
-	x = par->x;
-	y = par->y;
-	w = par->w;
-	h = par->h;
+	GdkRectangle area = par->area;
 	g_free(par);
 	g_mutex_unlock(il->data_mutex);
 
-	g_signal_emit(il, signals[SIGNAL_AREA_READY], 0, x, y, w, h);
+	g_signal_emit(il, signals[SIGNAL_AREA_READY], 0, &area);
 
 	return G_SOURCE_REMOVE;
 }
@@ -352,16 +345,13 @@ static gboolean image_loader_emit_percent_cb(gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
-static gboolean image_loader_emit_size_cb(gpointer data)
+static gboolean image_loader_emit_size_prepared_cb(gpointer data)
 {
-	gint width;
-	gint height;
 	auto il = static_cast<ImageLoader *>(data);
 	g_mutex_lock(il->data_mutex);
-	width = il->actual_width;
-	height = il->actual_height;
+	GqSize size{ il->actual_width, il->actual_height };
 	g_mutex_unlock(il->data_mutex);
-	g_signal_emit(il, signals[SIGNAL_SIZE], 0, width, height);
+	g_signal_emit(il, signals[SIGNAL_SIZE_PREPARED], 0, &size);
 	return G_SOURCE_REMOVE;
 }
 
@@ -385,63 +375,67 @@ static void image_loader_emit_percent(ImageLoader *il)
 	g_idle_add_full(G_PRIORITY_HIGH, image_loader_emit_percent_cb, il, nullptr);
 }
 
-static void image_loader_emit_size(ImageLoader *il)
+static void image_loader_emit_size_prepared(ImageLoader *il)
 {
-	g_idle_add_full(G_PRIORITY_HIGH, image_loader_emit_size_cb, il, nullptr);
+	g_idle_add_full(G_PRIORITY_HIGH, image_loader_emit_size_prepared_cb, il, nullptr);
 }
 
-static ImageLoaderAreaParam *image_loader_queue_area_ready(ImageLoader *il, GList **list, guint x, guint y, guint w, guint h)
+static ImageLoaderAreaParam *image_loader_queue_area_ready(ImageLoader *il, GList **list, GdkRectangle area)
 {
 	if (*list)
 		{
 		auto prev_par = static_cast<ImageLoaderAreaParam *>((*list)->data);
-		if (prev_par->x == x && prev_par->w == w &&
-		    prev_par->y + prev_par->h == y)
+		GdkRectangle &prev_area = prev_par->area;
+
+		if (prev_area.x == area.x && prev_area.width == area.width)
 			{
-			/* we can merge the notifications */
-			prev_par->h += h;
-			return nullptr;
+			if (prev_area.y + prev_area.height == area.y)
+				{
+				/* we can merge the notifications */
+				prev_area.height += area.height;
+				return nullptr;
+				}
+
+			if (prev_area.y == area.y + area.height)
+				{
+				/* we can merge the notifications */
+				prev_area.y = area.y;
+				prev_area.height += area.height;
+				return nullptr;
+				}
 			}
-		if (prev_par->x == x && prev_par->w == w &&
-		    y + h == prev_par->y)
+
+		if (prev_area.y == area.y && prev_area.height == area.height)
 			{
-			/* we can merge the notifications */
-			prev_par->h += h;
-			prev_par->y = y;
-			return nullptr;
-			}
-		if (prev_par->y == y && prev_par->h == h &&
-		    prev_par->x + prev_par->w == x)
-			{
-			/* we can merge the notifications */
-			prev_par->w += w;
-			return nullptr;
-			}
-		if (prev_par->y == y && prev_par->h == h &&
-		    x + w == prev_par->x)
-			{
-			/* we can merge the notifications */
-			prev_par->w += w;
-			prev_par->x = x;
-			return nullptr;
+			if (prev_area.x + prev_area.width == area.x)
+				{
+				/* we can merge the notifications */
+				prev_area.width += area.width;
+				return nullptr;
+				}
+
+			if (prev_area.x == area.x + area.width)
+				{
+				/* we can merge the notifications */
+				prev_area.x = area.x;
+				prev_area.width += area.width;
+				return nullptr;
+				}
 			}
 		}
 
 	auto par = g_new0(ImageLoaderAreaParam, 1);
 	par->il = il;
-	par->x = x;
-	par->y = y;
-	par->w = w;
-	par->h = h;
+	par->area = area;
 
 	*list = g_list_prepend(*list, par);
 	return par;
 }
 
 /* this function expects that il->data_mutex is locked by caller */
-static void image_loader_emit_area_ready(ImageLoader *il, guint x, guint y, guint w, guint h)
+static void image_loader_emit_area_ready(ImageLoader *il, GdkRectangle area)
 {
-	ImageLoaderAreaParam *par = image_loader_queue_area_ready(il, &il->area_param_list, x, y, w, h);
+	ImageLoaderAreaParam *par = image_loader_queue_area_ready(il, &il->area_param_list, area);
 
 	if (par)
 		{
@@ -453,9 +447,9 @@ static void image_loader_emit_area_ready(ImageLoader *il, guint x, guint y, guin
 /* the following functions may be executed in separate thread */
 
 /* this function expects that il->data_mutex is locked by caller */
-static void image_loader_queue_delayed_area_ready(ImageLoader *il, guint x, guint y, guint w, guint h)
+static void image_loader_queue_delayed_area_ready(ImageLoader *il, GdkRectangle area)
 {
-	image_loader_queue_area_ready(il, &il->area_param_delayed_list, x, y, w, h);
+	image_loader_queue_area_ready(il, &il->area_param_delayed_list, area);
 }
 
 
@@ -507,8 +501,8 @@ static void image_loader_sync_pixbuf(ImageLoader *il)
 }
 
 static void image_loader_area_updated_cb(gpointer,
-				 guint x, guint y, guint w, guint h,
-				 gpointer data)
+                                         gint x, gint y, gint w, gint h,
+                                         gpointer data)
 {
 	auto il = static_cast<ImageLoader *>(data);
 
@@ -523,45 +517,16 @@ static void image_loader_area_updated_cb(gpointer,
 
 	g_mutex_lock(il->data_mutex);
 	if (il->delay_area_ready)
-		image_loader_queue_delayed_area_ready(il, x, y, w, h);
+		image_loader_queue_delayed_area_ready(il, {x, y, w, h});
 	else
-		image_loader_emit_area_ready(il, x, y, w, h);
+		image_loader_emit_area_ready(il, {x, y, w, h});
 
 	if (il->stopping) il->backend->abort();
 
 	g_mutex_unlock(il->data_mutex);
 }
 
-static void image_loader_area_prepared_cb(gpointer, gpointer data)
-{
-	auto il = static_cast<ImageLoader *>(data);
-	GdkPixbuf *pb;
-	guchar *pix;
-	size_t h;
-	size_t rs;
-
-	/* a workaround for
-	   https://bugzilla.gnome.org/show_bug.cgi?id=547669
-	   https://bugzilla.gnome.org/show_bug.cgi?id=589334
-	*/
-	g_autofree gchar *format = il->backend->get_format_name();
-	if (strcmp(format, "svg") == 0 ||
-	    strcmp(format, "xpm") == 0)
-		{
-		return;
-		}
-
-	pb = il->backend->get_pixbuf();
-
-	h = gdk_pixbuf_get_height(pb);
-	rs = gdk_pixbuf_get_rowstride(pb);
-	pix = gdk_pixbuf_get_pixels(pb);
-
-	memset(pix, 0, rs * h); /*this should be faster than pixbuf_fill */
-}
-
-static void image_loader_size_cb(gpointer,
-				 gint width, gint height, gpointer data)
+static void image_loader_size_prepared_cb(gpointer, gint width, gint height, gpointer data)
 {
 	auto il = static_cast<ImageLoader *>(data);
 	gboolean scale = FALSE;
@@ -572,7 +537,7 @@ static void image_loader_size_cb(gpointer,
 	if (il->requested_width < 1 || il->requested_height < 1)
 		{
 		g_mutex_unlock(il->data_mutex);
-		image_loader_emit_size(il);
+		image_loader_emit_size_prepared(il);
 		return;
 		}
 	g_mutex_unlock(il->data_mutex);
@@ -595,7 +560,7 @@ static void image_loader_size_cb(gpointer,
 
 	if (!scale)
 		{
-		image_loader_emit_size(il);
+		image_loader_emit_size_prepared(il);
 		return;
 		}
 
@@ -610,7 +575,7 @@ static void image_loader_size_cb(gpointer,
 		}
 
 	g_mutex_unlock(il->data_mutex);
-	image_loader_emit_size(il);
+	image_loader_emit_size_prepared(il);
 }
 
 static void image_loader_stop_loader(ImageLoader *il)
@@ -812,7 +777,7 @@ static void image_loader_setup_loader(ImageLoader *il)
 			il->backend = get_image_loader_backend_default();
 		}
 
-	il->backend->init(image_loader_area_updated_cb, image_loader_size_cb, image_loader_area_prepared_cb, il);
+	il->backend->init(image_loader_area_updated_cb, image_loader_size_prepared_cb, il);
 	il->backend->set_page_num(il->fd->page_num);
 
 	il->fd->format_name = il->backend->get_format_name();
@@ -1041,11 +1006,7 @@ static void image_loader_stop(ImageLoader *il)
 {
 	if (!il) return;
 
-	if (il->idle_id)
-		{
-		g_source_remove(il->idle_id);
-		il->idle_id = 0;
-		}
+	g_clear_handle_id(&il->idle_id, g_source_remove);
 
 	if (il->thread)
 		{
@@ -1084,7 +1045,7 @@ void image_loader_delay_area_ready(ImageLoader *il, gboolean enable)
 			auto par = static_cast<ImageLoaderAreaParam *>(work->data);
 			work = work->next;
 
-			g_signal_emit(il, signals[SIGNAL_AREA_READY], 0, par->x, par->y, par->w, par->h);
+			g_signal_emit(il, signals[SIGNAL_AREA_READY], 0, &par->area);
 			}
 		g_list_free_full(list, g_free);
 		}
@@ -1370,16 +1331,6 @@ gboolean image_loader_get_shrunk(ImageLoader *il)
 	return ret;
 }
 
-const gchar *image_loader_get_error(ImageLoader *il)
-{
-	const gchar *ret = nullptr;
-	if (!il) return nullptr;
-	g_mutex_lock(il->data_mutex);
-	if (il->error) ret = il->error->message;
-	g_mutex_unlock(il->data_mutex);
-	return ret;
-}
-
 
 /**
  *  @FIXME this can be rather slow and blocks until the size is known
@@ -1407,5 +1358,10 @@ gboolean image_load_dimensions(FileData *fd, gint *width, gint *height)
 	image_loader_free(il);
 
 	return success;
+}
+
+void free_pixels(guchar *pixels, gpointer)
+{
+	g_free(pixels);
 }
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

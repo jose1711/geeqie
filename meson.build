@@ -1,15 +1,4 @@
-# This file is a part of Geeqie project (https://www.geeqie.org/).
-# Copyright (C) 2008 - 2022 The Geeqie Team
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 2 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# SPDX-License-Identifier: GPL-2.0-or-later
 
 # Meson default directories used in this project:
 # prefix - /usr/local
@@ -28,8 +17,8 @@
 #               /usr/local/share/applications           org.geeqie.Geeqie.desktop
 # [gq_]appdir   /usr/local/share/geeqie/            *   org,geeqie.template.desktop
 # desktopdir    /usr/local/share/geeqie/applications    plugin desktop files
-# appdatadir    /usr/local/share/metainfo               org.geeqie.Geeqie.appdata.xml
-# icondir       /usr/local/share/pixmaps                geeqie.png icon
+# appstreamdir  /usr/local/share/metainfo               org.geeqie.Geeqie.metainfo.xml
+# icondir       /usr/local/share/icons/hicolor/scalable/apps  geeqie.svg icon
 # [gq_]helpdir  /usr/local/share/doc/geeqie         *   readme files etc.
 # [gq_]htmldir  /usr/local/share/doc/geeqie/html    *   help files
 # gq_localedir  /usr/locale/share/locale
@@ -43,10 +32,10 @@ project(
     'geeqie',
     'c',
     'cpp',
-    version : run_command('./version.sh', check : true).stdout().strip(),
+    version : run_command('./build-aux/version.sh', check : true).stdout().strip(),
     license : ['GPL-2.0-or-later'],
-    meson_version : '>=1.0.0',
-    default_options : ['cpp_std=c++14', 'warning_level=3', 'buildtype=debugoptimized', 'cpp_link_args=-rdynamic']
+    meson_version : '>=1.3.2',
+    default_options : ['cpp_std=c++17', 'warning_level=3', 'buildtype=release', 'cpp_link_args=-rdynamic']
 )
 
 # To inhibit warnings from the generated file icons.h
@@ -77,6 +66,7 @@ else
 endif
 
 debug = get_option('debug')
+fd_verbose_debug = get_option('fd_verbose_debug')
 
 # Note that main.cc sets prefix to the directory above where the executable is run from.
 # This is to allow AppImages to be used
@@ -121,15 +111,18 @@ datadir = join_paths(prefix, get_option('datadir'))
 
 # Installation paths are absolute
 appdir = join_paths(prefix, gq_appdir)
-appdatadir = join_paths(datadir, 'metainfo')
+appstreamdir = join_paths(datadir, 'metainfo')
 desktopdir = join_paths(datadir, meson.project_name(), 'applications')
 helpdir = join_paths(prefix, gq_helpdir)
 htmldir = join_paths(prefix, gq_htmldir)
-icondir = join_paths(datadir, 'pixmaps')
+icondir = join_paths(datadir, 'icons/hicolor/scalable/apps/')
 mandir1 = join_paths(datadir, 'man', 'man1')
 completionsdir = join_paths(datadir, 'bash-completion', 'completions')
+
 podir = join_paths(meson.project_source_root(), 'po')
-scriptsdir = join_paths(meson.project_source_root(), 'scripts')
+buildauxdir = join_paths(meson.project_source_root(), 'build-aux')
+packagingdir = join_paths(meson.project_source_root(), 'packaging')
+testsdir = join_paths(meson.project_source_root(), 'teste')
 
 summary({'gq_appdir': gq_appdir,
         'gq_bindir': gq_helpdir,
@@ -142,6 +135,22 @@ summary({'gq_appdir': gq_appdir,
 conf_data = configuration_data()
 conf_data.set('DEBUG', debug)
 
+conf_data.set('FD_VERBOSE_DEBUG', 0)
+option = get_option('fd_verbose_debug')
+if not option.disabled()
+    conf_data.set('FD_VERBOSE_DEBUG', 1)
+    if conf_data.get('DEBUG', false) == false
+        message('fd_verbose_debug force-enabling debug')
+        conf_data.set('DEBUG', true)
+    endif
+endif
+
+# Detect if mntent.h is available
+conf_data.set('HAVE_MNTENT_H', 0)
+if cc.has_header('mntent.h')
+    conf_data.set('HAVE_MNTENT_H', 1)
+endif
+
 conf_data.set('HAVE_GTK4', 0)
 option = get_option('gtk4')
 if option.enabled()
@@ -150,34 +159,8 @@ if option.enabled()
 else
     gtk_dep = dependency('gtk+-3.0', version : '>=3.24', required: true)
 endif
-glib_dep = dependency('glib-2.0', version : '>=2.52', required: true)
-
-# Required only when backward-cpp is used
-conf_data.set('HAVE_DEVELOPER', 0)
-libdw_dep = []
-libunwind_dep = []
-option = get_option('extended_stacktrace')
-if not option.disabled()
-    libdw_dep = dependency('libdw', required : false)
-    if libdw_dep.found()
-        libunwind_dep = dependency('libunwind', required : false)
-        if libunwind_dep.found()
-            if cc.has_link_argument('-ldwarf')
-                add_project_link_arguments('-ldwarf', language: 'cpp')
-                conf_data.set('HAVE_DEVELOPER', 1)
-                summary({'developer mode' : ['extended stacktrace:', true]}, section : 'Debugging', bool_yn : true)
-            else
-                summary({'developer mode' : ['link argument -ldwarf not found. extended stacktrace:', false]}, section : 'Debugging', bool_yn : true)
-            endif
-        else
-            summary({'developer mode' : ['libunwind not found. extended stacktrace:', false]}, section : 'Debugging', bool_yn : true)
-        endif
-    else
-        summary({'developer mode' : ['libdw not found. extended stacktrace:', false]}, section : 'Debugging', bool_yn : true)
-    endif
-else
-    summary({'developer mode' : ['extended stacktrace:', false]}, section : 'Debugging', bool_yn : true)
-endif
+glib_dep = dependency('glib-2.0', version : '>=2.66', required: true)
+pango_dep = dependency('pango', version : '>=1.46', required: true)
 
 # Required only for seg. fault stacktrace and backtrace debugging
 conf_data.set('HAVE_EXECINFO_H', 0)
@@ -196,6 +179,11 @@ if not option.disabled()
 else
     summary({'execinfo' : ['stacktrace supported:', false]}, section : 'Debugging', bool_yn : true)
 endif
+
+# To override the default of 'release', run 'meson setup --buildtype=debug build'
+# That is necessary for stacktrace output
+buildtype = get_option('buildtype')
+summary({'buildtype' : buildtype}, section : 'Debugging')
 
 conf_data.set('ENABLE_UNIT_TESTS', 0)
 option = get_option('unit_tests')
@@ -250,18 +238,6 @@ if not option.disabled()
     endif
 else
     summary({'djvu' : ['disabled - djvu files supported:', false]}, section : 'Configuration', bool_yn : true)
-endif
-
-option = get_option('evince')
-if not option.disabled()
-    evince = find_program('evince', required : false)
-    if evince.found()
-        summary({'print preview' : ['print preview supported:', true]}, section : 'Configuration', bool_yn : true)
-    else
-        summary({'print preview' : ['evince not found - print preview supported:', false]}, section : 'Configuration', bool_yn : true)
-    endif
-else
-    summary({'print preview' : ['disabled - print preview supported:', false]}, section : 'Configuration', bool_yn : true)
 endif
 
 # Required only for seg. fault stacktrace and backtrace debugging
@@ -333,47 +309,66 @@ else
     summary({'fits' : ['disabled - fits files supported:', false]}, section : 'Configuration', bool_yn : true)
 endif
 
-conf_data.set('HAVE_CLUTTER', 0)
-conf_data.set('HAVE_LIBCHAMPLAIN', 0)
-conf_data.set('HAVE_LIBCHAMPLAIN_GTK', 0)
 champlain_dep = []
 champlain_gtk_dep = []
 clutter_dep = []
 clutter_gtk_dep = []
-req_version_champlain = '>=0.12'
-req_version_champlain_gtk = '>=0.12'
-req_version_clutter = '>=1.0'
-req_version_clutter_gtk = '>=1.0'
-option = get_option('gps-map')
-if not option.disabled()
-    champlain_dep = dependency('champlain-0.12', version : req_version_champlain, required : get_option('gps-map'))
-    champlain_gtk_dep = dependency('champlain-gtk-0.12', version : req_version_champlain_gtk, required : get_option('gps-map'))
-    if champlain_dep.found() and champlain_gtk_dep.found()
-        clutter_dep = dependency('clutter-1.0', version : req_version_clutter, required : get_option('gps-map'))
-        clutter_gtk_dep = dependency('clutter-gtk-1.0', version : req_version_clutter_gtk, required : get_option('gps-map'))
-        if clutter_dep.found() and clutter_gtk_dep.found()
-            conf_data.set('HAVE_CLUTTER', 1)
-            conf_data.set('HAVE_LIBCHAMPLAIN', 1)
-            conf_data.set('HAVE_LIBCHAMPLAIN_GTK', 1)
+shumate_dep = []
+
+if conf_data.get('HAVE_GTK4', 0) == 1
+    conf_data.set('HAVE_LIBSHUMATE', 0)
+    req_version_shumate = '>=1.5.0'
+    option = get_option('gps-map')
+    if not option.disabled()
+        shumate_dep = dependency('shumate-1.0', version : req_version_shumate, required : get_option('gps-map'))
+        if shumate_dep.found()
+            conf_data.set('HAVE_LIBSHUMATE', 1)
             summary({'gps-map' : ['GPS map displayed', true]}, section : 'Configuration', bool_yn : true)
         else
-            if not clutter_dep.found()
-                summary({'gps-map-clutter' : ['clutter-1.0 ' + req_version_clutter + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
+            summary({'gps-map' : ['shumate-1.0 ' + req_version_shumate + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
+        endif
+    else
+        summary({'gps-map' : ['disabled - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
+    endif
+else
+    conf_data.set('HAVE_CLUTTER', 0)
+    conf_data.set('HAVE_LIBCHAMPLAIN', 0)
+    conf_data.set('HAVE_LIBCHAMPLAIN_GTK', 0)
+    req_version_champlain = '>=0.12'
+    req_version_champlain_gtk = '>=0.12'
+    req_version_clutter = '>=1.0'
+    req_version_clutter_gtk = '>=1.0'
+    option = get_option('gps-map')
+    if not option.disabled()
+        champlain_dep = dependency('champlain-0.12', version : req_version_champlain, required : get_option('gps-map'))
+        champlain_gtk_dep = dependency('champlain-gtk-0.12', version : req_version_champlain_gtk, required : get_option('gps-map'))
+        if champlain_dep.found() and champlain_gtk_dep.found()
+            clutter_dep = dependency('clutter-1.0', version : req_version_clutter, required : get_option('gps-map'))
+            clutter_gtk_dep = dependency('clutter-gtk-1.0', version : req_version_clutter_gtk, required : get_option('gps-map'))
+            if clutter_dep.found() and clutter_gtk_dep.found()
+                conf_data.set('HAVE_CLUTTER', 1)
+                conf_data.set('HAVE_LIBCHAMPLAIN', 1)
+                conf_data.set('HAVE_LIBCHAMPLAIN_GTK', 1)
+                summary({'gps-map' : ['GPS map displayed', true]}, section : 'Configuration', bool_yn : true)
+            else
+                if not clutter_dep.found()
+                    summary({'gps-map-clutter' : ['clutter-1.0 ' + req_version_clutter + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
+                endif
+                if not clutter_gtk_dep.found()
+                    summary({'gps-map-clutter-gtk' : ['clutter-gtk-1.0 ' + req_version_clutter_gtk + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
+                endif
             endif
-            if not clutter_gtk_dep.found()
-                summary({'gps-map-clutter-gtk' : ['clutter-gtk-1.0 ' + req_version_clutter_gtk + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
+        else
+            if not champlain_dep.found()
+                summary({'gps-map-champlain' : ['champlain-0.12 ' + req_version_champlain + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
+            endif
+            if not champlain_gtk_dep.found()
+                summary({'gps-map-champlain-gtk' : ['champlain-gtk-0.12 ' + req_version_champlain_gtk + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
             endif
         endif
     else
-        if not champlain_dep.found()
-            summary({'gps-map-champlain' : ['champlain-0.12 ' + req_version_champlain + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
-        endif
-        if not champlain_gtk_dep.found()
-            summary({'gps-map-champlain-gtk' : ['champlain-gtk-0.12 ' + req_version_champlain_gtk + ' not found - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
-        endif
+        summary({'gps-map' : ['disabled - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
     endif
-else
-    summary({'gps-map' : ['disabled - GPS map displayed:', false]}, section : 'Configuration', bool_yn : true)
 endif
 
 conf_data.set('HAVE_HEIF', 0)
@@ -648,12 +643,8 @@ configure_file(input : 'config.h.in',
                encoding : 'UTF-8',
                configuration : conf_data)
 
-# For gtk builder checks on .ui files
-ui_sources = []
-
 # Process subdirs before the sources
 subdir('po')
-subdir('plugins')
 
 conditional_unit_test_deps = []
 if conf_data.get('ENABLE_UNIT_TESTS', 0) == 1
@@ -670,37 +661,26 @@ if conf_data.get('ENABLE_UNIT_TESTS', 0) == 1
     endif
 endif
 
+# Generate css, icons and ui files
+subdir('data')
+
+if conf_data.get('ENABLE_UNIT_TESTS', 0) == 1
+    subdir('tests')
+endif
+
 # Generate the executable
 subdir('src')
+
+subdir('build-aux')
 
 # Generate the help files
 subdir('doc')
 
-# Generate the command line auto-complete file
-subdir('auto-complete')
-
-# Install other project files
-if running_from_git
-    cmd = [find_program('gen_changelog.sh'), meson.current_source_dir(), meson.current_build_dir()]
-    custom_target(
-        'ChangeLog',
-        input: 'ChangeLog.gqview',
-        output: ['ChangeLog', 'ChangeLog.html'],
-        command: cmd,
-        install: true,
-        install_dir: helpdir)
-    meson.add_dist_script(cmd)
-    summary({'ChangeLog' : ['ChangeLog, ChangeLog.html created:', true]}, section : 'Documentation', bool_yn : true)
-elif fs.exists('ChangeLog.html')
-    install_data('ChangeLog', 'ChangeLog.html', install_dir: helpdir)
-    summary({'ChangeLog' : ['ChangeLog, ChangeLog.html installed from dist:', true]}, section : 'Documentation', bool_yn : true)
-endif
-
-install_data('geeqie.png', install_dir : icondir)
-install_data('geeqie.1', install_dir : mandir1)
+geeqie_icon = join_paths(meson.project_source_root(), 'data', 'icons', 'geeqie.svg')
+install_data(geeqie_icon, install_dir : icondir)
 
 i18n.merge_file(
-    input : 'org.geeqie.Geeqie.desktop.in',
+    input : 'data/org.geeqie.Geeqie.desktop.in',
     output : 'org.geeqie.Geeqie.desktop',
     type : 'desktop',
     po_dir : podir,
@@ -708,24 +688,17 @@ i18n.merge_file(
     install_dir : join_paths(datadir, 'applications'))
 
 i18n.merge_file(
-    input : 'org.geeqie.cache-maintenance.desktop.in',
-    output : 'org.geeqie.cache-maintenance.desktop',
-    type : 'desktop',
-    po_dir : podir,
-    install : true,
-    install_dir : join_paths(datadir, 'applications'))
-
-i18n.merge_file(
-    input : 'org.geeqie.Geeqie.appdata.xml.in',
-    output : 'org.geeqie.Geeqie.appdata.xml',
+    input : 'data/org.geeqie.Geeqie.metainfo.xml.in',
+    output : 'org.geeqie.Geeqie.metainfo.xml',
     type : 'xml',
     po_dir : podir,
     install : true,
-    install_dir : appdatadir)
+    install_dir : appstreamdir)
 
-configure_file(input: 'geeqie.spec.in', output: 'geeqie.spec', configuration: conf_data)
+geeqie_spec_in = join_paths(packagingdir, 'rpm', 'geeqie.spec.in')
+configure_file(input: geeqie_spec_in, output: 'geeqie.spec', configuration: conf_data)
 
-isolate_test_sh = find_program('isolate-test.sh', dirs : scriptsdir, required : true)
+isolate_test_sh = find_program('isolate-test.sh', dirs : buildauxdir, required : true)
 
 # Basic test of the executable
 xvfb = find_program('xvfb-run', required : false)
@@ -745,13 +718,14 @@ endif
 option = get_option('unit_tests')
 if option.enabled()
     if xvfb.found()
-        get_test_images_sh = find_program('get-test-images.sh', dirs : scriptsdir, required : true)
-        image_test_py = find_program('image-test.py', dirs : scriptsdir, required : true)
+        get_test_images_sh = find_program('get-test-images.sh', dirs : buildauxdir, required : true)
+        image_test_py = find_program('image-test.py', dirs : buildauxdir, required : true)
 
-        images_dir = join_paths(meson.current_build_dir(), 'test-images.p')
+        images_parent_dir = join_paths(meson.current_build_dir(), 'test-images.p')
+        images_dir = join_paths(images_parent_dir, 'images')
 
         message('Downloading test images')
-        sources_list = run_command(get_test_images_sh, images_dir,  'https://github.com/caclark/geeqie-test.git', check: true)
+        sources_list = run_command(get_test_images_sh, images_parent_dir,  'https://github.com/BestImageViewer/geeqie-test-images.git', check: true)
 
         sources = sources_list.stdout().strip().split('\n')
 
@@ -765,11 +739,24 @@ if option.enabled()
 
         endforeach
         summary({'Image tests' : ['Test runs:', true]}, section : 'Testing', bool_yn : true)
+
+        # FileData refcounting test requires images, so running here, if enabled.
+        if conf_data.get('FD_VERBOSE_DEBUG', 0) == 1
+            fd_refcount_test_py = find_program('fd-refcount-test.py', dirs : buildauxdir, required : true)
+            test_cmd = [fd_refcount_test_py.full_path(), geeqie_exe.full_path(), images_dir]
+            test('FileData refcount test', isolate_test_sh, args: test_cmd, timeout: 100, suite: ['functional', 'image', 'filedata'])
+            summary({'FileData refcount test' : ['Test runs:', true]}, section : 'Testing', bool_yn : true)
+        else
+            summary({'FileData refcount test' : ['Test runs:', true]}, section : 'Testing', bool_yn : true)
+        endif
     else
+        # TODO: Any way to avoid code duplication in the "test not run" cases?
         summary({'Image tests' : ['Test runs:', false]}, section : 'Testing', bool_yn : true)
+        summary({'FileData refcount test' : ['Test runs:', false]}, section : 'Testing', bool_yn : true)
     endif
 else
     summary({'Image tests' : ['Test runs:', false]}, section : 'Testing', bool_yn : true)
+    summary({'FileData refcount test' : ['Test runs:', false]}, section : 'Testing', bool_yn : true)
 endif
 
 # Code correctness checks
@@ -796,7 +783,7 @@ else
 endif
 
 # Single value enum checks
-enum_check_sh = find_program('enum-check.sh', dirs : scriptsdir, required : true)
+enum_check_sh = find_program('enum-check.sh', dirs : buildauxdir, required : true)
 if enum_check_sh.found()
     foreach source_file : code_sources
         source_file_name = fs.name(source_file)
@@ -809,7 +796,7 @@ else
 endif
 
 # Debug statement checks
-debug_check_sh = find_program('debug-check.sh', dirs : scriptsdir, required : true)
+debug_check_sh = find_program('debug-check.sh', dirs : buildauxdir, required : true)
 if debug_check_sh.found()
     foreach source_file : code_sources
         source_file_name = fs.name(source_file)
@@ -824,7 +811,7 @@ else
 endif
 
 # Temporary comments checks
-tmp_comments_check_sh = find_program('temporary-comments-check.sh', dirs : scriptsdir, required : true)
+tmp_comments_check_sh = find_program('temporary-comments-check.sh', dirs : buildauxdir, required : true)
 if tmp_comments_check_sh.found()
     foreach source_file : code_sources
         source_file_name = fs.name(source_file)
@@ -839,13 +826,13 @@ else
 endif
 
 # GTK4 migration regression checks
-gtk4_migration_check_sh = find_program('gtk4-migration-regression-check.sh', dirs : scriptsdir, required : true)
+gtk4_migration_check_sh = find_program('gtk4-migration-regression-check.sh', dirs : buildauxdir, required : true)
 if gtk4_migration_check_sh.found()
     compat_cc = join_paths(meson.project_source_root(), 'src', 'compat.cc')
     compat_h = join_paths(meson.project_source_root(), 'src', 'compat.h')
     foreach source_file : code_sources
         source_file_name = fs.name(source_file)
-        if (source_file_name != 'debug.h')
+        if (source_file_name != 'compat-deprecated.h' and source_file_name != 'debug.h')
             test('GTK4 migration_ ' + source_file_name, gtk4_migration_check_sh, args : [source_file, compat_cc, compat_h], timeout : 100, suite : 'analysis')
         endif
     endforeach
@@ -856,7 +843,7 @@ else
 endif
 
 # Untranslated text checks
-untranslated_text_sh = find_program('untranslated-text.sh', dirs : scriptsdir, required : true)
+untranslated_text_sh = find_program('untranslated-text.sh', dirs : buildauxdir, required : true)
 if untranslated_text_sh.found()
      foreach source_file : code_sources
         if fs.name(source_file).endswith('.cc')
@@ -875,7 +862,7 @@ option = get_option('lua')
 if not option.disabled()
     if lua_dep.found()
         if xvfb.found()
-            lua_test_sh = find_program('lua-test.sh', dirs : scriptsdir, required : true)
+            lua_test_sh = find_program('lua-test.sh', dirs : buildauxdir, required : true)
             test('Lua test', isolate_test_sh, args: [lua_test_sh.full_path(), geeqie_exe.full_path()], timeout: 100, suite : 'analysis')
 
             summary({'lua' : ['Test runs:', true]}, section : 'Testing', bool_yn : true)
@@ -890,7 +877,7 @@ else
 endif
 
 # Ancillary files test
-test_ancillary_files_sh = find_program('test-ancillary-files.sh', dirs : scriptsdir, required : true)
+test_ancillary_files_sh = find_program('test-ancillary-files.sh', dirs : buildauxdir, required : true)
 test('Ancillary files', test_ancillary_files_sh, args: [meson.current_source_dir()], timeout: 100, suite : 'analysis')
 
 summary({'Ancillary files' : ['Test runs:', true]}, section : 'Testing', bool_yn : true)

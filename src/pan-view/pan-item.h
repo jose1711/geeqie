@@ -28,67 +28,72 @@
 #include <gdk/gdk.h>
 #include <glib.h>
 
+#include "geometry.h"
 #include "pan-types.h"
 
 class FileData;
 struct PixbufRenderer;
 
+enum PanBorderType {
+	PAN_BORDER_NONE = 0,
+	PAN_BORDER_1 = 1 << 0,
+	PAN_BORDER_2 = 1 << 1,
+	PAN_BORDER_3 = 1 << 2,
+	PAN_BORDER_1_3 = PAN_BORDER_1 | PAN_BORDER_3,
+	PAN_BORDER_4 = 1 << 3
+};
+
+enum PanTextAttrType {
+	PAN_TEXT_ATTR_NONE = 0,
+	PAN_TEXT_ATTR_BOLD = 1 << 0,
+	PAN_TEXT_ATTR_HEADING = 1 << 1,
+	PAN_TEXT_ATTR_BOLD_HEADING = PAN_TEXT_ATTR_BOLD | PAN_TEXT_ATTR_HEADING,
+	PAN_TEXT_ATTR_MARKUP = 1 << 2
+};
+
+PanItemType get_pan_item_type(PanImageSize size);
+
 void pan_item_free(PanItem *pi);
 
-void pan_item_set_key(PanItem *pi, const gchar *key);
 void pan_item_added(PanWindow *pw, PanItem *pi);
 void pan_item_remove(PanWindow *pw, PanItem *pi);
 
-// Determine sizes
-void pan_item_size_by_item(PanItem *pi, PanItem *child, gint border);
-void pan_item_size_coordinates(PanItem *pi, gint border, gint &w, gint &h);
-
 // Find items
-PanItem *pan_item_find_by_key(PanWindow *pw, PanItemType type, const gchar *key);
-GList *pan_item_find_by_path(PanWindow *pw, PanItemType type, const gchar *path,
-			     gboolean ignore_case, gboolean partial);
-GList *pan_item_find_by_fd(PanWindow *pw, PanItemType type, FileData *fd,
-			   gboolean ignore_case, gboolean partial);
+PanItem *pan_item_find_by_key(PanWindow *pw, PanItemType type, PanKey key);
+PanItemList pan_item_find_by_path(PanWindow *pw, PanItemType type, const gchar *path,
+                                  gboolean ignore_case, gboolean partial);
+PanItem *pan_item_find_by_fd(PanWindow *pw, PanItemType type, FileData *fd,
+                             gboolean ignore_case, gboolean partial);
 PanItem *pan_item_find_by_coord(PanWindow *pw, PanItemType type,
-				gint x, gint y, const gchar *key);
+                                gint x, gint y, PanKey key);
 
 // Item box type
 PanItem *pan_item_box_new(PanWindow *pw, FileData *fd, gint x, gint y, gint width, gint height,
-                          gint border_size, PanColor base, PanColor bord);
+                          GqColor base, gint border_size, GqColor border_color);
 void pan_item_box_shadow(PanItem *pi, gint offset, gint fade);
-gboolean pan_item_box_draw(PanWindow *pw, PanItem *pi, GdkPixbuf *pixbuf, PixbufRenderer *pr,
-                           gint x, gint y, gint width, gint height);
 
 // Item triangle type
 PanItem *pan_item_tri_new(PanWindow *pw,
-                          GdkPoint c1, GdkPoint c2, GdkPoint c3,
-                          PanColor color,
-                          gint borders, PanColor border_color);
-gboolean pan_item_tri_draw(PanWindow *pw, PanItem *pi, GdkPixbuf *pixbuf, PixbufRenderer *pr,
-                           gint x, gint y, gint width, gint height);
+                          GqPoint c1, GqPoint c2, GqPoint c3,
+                          GqColor color,
+                          PanBorderType borders, GqColor border_color);
+void pan_item_tri_shift(PanItem *pi, gint x, gint y);
 
 // Item text type
 PanItem *pan_item_text_new(PanWindow *pw, gint x, gint y, const gchar *text,
-                           PanTextAttrType attr, PanBorderType border, PanColor color);
-gboolean pan_item_text_draw(PanWindow *pw, PanItem *pi, GdkPixbuf *pixbuf, PixbufRenderer *pr,
-                            gint x, gint y, gint width, gint height);
+                           PanTextAttrType attr, gint border_size, GqColor color);
 
 // Item thumbnail type
 PanItem *pan_item_thumb_new(PanWindow *pw, FileData *fd, gint x, gint y);
-gboolean pan_item_thumb_draw(PanWindow *pw, PanItem *pi, GdkPixbuf *pixbuf, PixbufRenderer *pr,
-                             gint x, gint y, gint width, gint height);
 
 // Item image type
 PanItem *pan_item_image_new(PanWindow *pw, FileData *fd, gint x, gint y, gint w, gint h);
-gboolean pan_item_image_draw(PanWindow *pw, PanItem *pi, GdkPixbuf *pixbuf, PixbufRenderer *pr,
-                             gint x, gint y, gint width, gint height);
 
 // Alignment
 class PanTextAlignment
 {
 public:
-	PanTextAlignment(PanWindow *pw, gint x, gint y, const gchar *key);
-	~PanTextAlignment();
+	PanTextAlignment(PanWindow *pw, gint x, gint y, PanKey key);
 
 	void add(const gchar *label, const gchar *text);
 	void calc(PanItem *box);
@@ -106,7 +111,8 @@ private:
 
 	gint x;
 	gint y;
-	gchar *key;
+	PanKey key;
+	int label_width_max = 0;
 };
 
 #endif

@@ -1,15 +1,4 @@
-# This file is a part of Geeqie project (https://www.geeqie.org/).
-# Copyright (C) 2008 - 2022 The Geeqie Team
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 2 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# SPDX-License-Identifier: GPL-2.0-or-later
 
 # These gq_* paths are used relative to /prefix/ e.g.
 #               prefix
@@ -27,11 +16,10 @@ option('archive', type : 'feature', value : 'auto', description : 'archive files
 option('cms', type : 'feature', value : 'auto', description : 'color management system')
 option('doxygen', type : 'feature', value : 'auto', description : 'lua api help file')
 option('djvu', type : 'feature', value : 'auto', description : 'djvu')
-option('evince', type : 'feature', value : 'auto', description : 'print preview')
 option('execinfo', type : 'feature', value : 'auto', description : 'execinfo.h')
 option('exiv2', type : 'feature', value : 'auto', description : 'exiv2')
 option('exr', type : 'feature', value : 'auto', description : 'exr')
-option('extended_stacktrace', type : 'feature', value : 'auto', description : 'extended stacktrace')
+option('fd_verbose_debug', type : 'feature', value : 'disabled', description : 'verbose filedata debugging')
 option('fits', type : 'feature', value : 'auto', description : 'fits')
 option('git', type : 'feature', value : 'auto', description : 'lua-api and changelog.html')
 option('gps-map', type : 'feature', value : 'auto', description : 'gps map')

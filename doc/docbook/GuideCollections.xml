@@ -62,8 +62,7 @@
       is available for the icon pane by right clicking the mouse or pressing the Menu key.
     </para>
     <para>
-      <emphasis role="underline"><link linkend="GuideReferenceKeyboardShortcuts" endterm="titleGuideReferenceKeyboardShortcuts" /></emphasis>
-      are available in the collection window:
+      Keyboard Shortcuts are available in the collection window:
     </para>
     <para>
       The
@@ -104,6 +103,15 @@
       Right-click menu item
       <emphasis role="strong">Sort</emphasis>
       , in addition to the standard sort methods, permits images to be randomly arranged.
+    </para>
+    <para />
+  </section>
+  <section id="InfoText">
+    <title>Infotext</title>
+    <para>
+      Right-click menu item
+      <emphasis role="strong">Infotext</emphasis>
+      , allows additional text to be placed against a thumbnail. See <link linkend="GuideReferenceCollectionFiles">Collection file format</link>.
     </para>
     <para />
   </section>

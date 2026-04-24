@@ -21,6 +21,9 @@
 
 #include "metadata.h"
 
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #include <algorithm>
 #include <array>
 #include <clocale>
@@ -30,12 +33,17 @@
 #include <string>
 
 #include <glib-object.h>
+#include <grp.h>
+#include <pwd.h>
 
 #include <config.h>
 
 #include "cache.h"
 #include "exif.h"
 #include "filedata.h"
+#if HAVE_LUA
+#  include "glua.h"
+#endif
 #include "intl.h"
 #include "layout-util.h"
 #include "main-defines.h"
@@ -119,6 +127,127 @@ inline gboolean is_keywords_separator(gchar c)
 	    || c == '\r'
 	    || c == '\b';
 }
+
+/*
+ *-------------------------------------------------------------------
+ * file info
+ * shares tag naming infrastructure with exif
+ * we should probably not invest too much effort into this because
+ * new exiv2 will support the same functionality
+ * https://dev.exiv2.org/issues/505
+ *-------------------------------------------------------------------
+ */
+
+gchar *mode_number(mode_t m)
+{
+	gint mb = 0;
+	if (m & S_ISUID) mb |= 4;
+	if (m & S_ISGID) mb |= 2;
+	if (m & S_ISVTX) mb |= 1;
+
+	gint mu = 0;
+	if (m & S_IRUSR) mu |= 4;
+	if (m & S_IWUSR) mu |= 2;
+	if (m & S_IXUSR) mu |= 1;
+
+	gint mg = 0;
+	if (m & S_IRGRP) mg |= 4;
+	if (m & S_IWGRP) mg |= 2;
+	if (m & S_IXGRP) mg |= 1;
+
+	gint mo = 0;
+	if (m & S_IROTH) mo |= 4;
+	if (m & S_IWOTH) mo |= 2;
+	if (m & S_IXOTH) mo |= 1;
+
+	gchar pbuf[10];
+	pbuf[0] = (m & S_IRUSR) ? 'r' : '-';
+	pbuf[1] = (m & S_IWUSR) ? 'w' : '-';
+	pbuf[2] = (m & S_IXUSR) ? 'x' : '-';
+	pbuf[3] = (m & S_IRGRP) ? 'r' : '-';
+	pbuf[4] = (m & S_IWGRP) ? 'w' : '-';
+	pbuf[5] = (m & S_IXGRP) ? 'x' : '-';
+	pbuf[6] = (m & S_IROTH) ? 'r' : '-';
+	pbuf[7] = (m & S_IWOTH) ? 'w' : '-';
+	pbuf[8] = (m & S_IXOTH) ? 'x' : '-';
+	pbuf[9] = '\0';
+
+	return g_strdup_printf("%s (%d%d%d%d)", pbuf, mb, mu, mg, mo);
+}
+
+gchar *get_file_owner(const gchar *path_utf8)
+{
+	struct stat st;
+	if (!stat_utf8(path_utf8, &st)) return nullptr;
+
+	struct passwd *user = getpwuid(st.st_uid);
+
+	return user ? g_strdup(user->pw_name) : g_strdup_printf("%u", st.st_uid);
+}
+
+gchar *get_file_group(const gchar *path_utf8)
+{
+	struct stat st;
+	if (!stat_utf8(path_utf8, &st)) return nullptr;
+
+	struct group *group = getgrgid(st.st_gid);
+
+	return group ? g_strdup(group->gr_name) : g_strdup_printf("%u", st.st_gid);
+}
+
+gchar *metadata_file_info(const FileData *fd, const gchar *key)
+{
+	if (strcmp(key, "file.size") == 0)
+		{
+		return g_strdup_printf("%ld", static_cast<long>(fd->size));
+		}
+	if (strcmp(key, "file.date") == 0)
+		{
+		return g_strdup(text_from_time(fd->date));
+		}
+	if (strcmp(key, "file.mode") == 0)
+		{
+		return mode_number(fd->mode);
+		}
+	if (strcmp(key, "file.ctime") == 0)
+		{
+		return g_strdup(text_from_time(fd->cdate));
+		}
+	if (strcmp(key, "file.class") == 0)
+		{
+		return g_strdup(format_class_list[fd->format_class]);
+		}
+	if (strcmp(key, "file.owner") == 0)
+		{
+		return get_file_owner(fd->path);
+		}
+	if (strcmp(key, "file.group") == 0)
+		{
+		return get_file_group(fd->path);
+		}
+	if (strcmp(key, "file.link") == 0)
+		{
+		return get_symbolic_link(fd->path);
+		}
+	if (strcmp(key, "file.page_no") == 0)
+		{
+		return (fd->page_total > 1) ? g_strdup_printf("[%d/%d]", fd->page_num + 1, fd->page_total) : nullptr;
+		}
+	return g_strdup("");
+}
+
+#if HAVE_LUA
+gchar *metadata_lua_info(FileData *fd, const gchar *key)
+{
+	const gchar *script_name_utf8 = key + 4;
+	g_autofree gchar *script_name = path_from_utf8(script_name_utf8);
+
+	g_autofree gchar *raw_data = lua_callvalue(fd, script_name, nullptr);
+	g_autofree gchar *valid_data = g_utf8_make_valid(raw_data, -1);
+
+	return g_utf8_substring(valid_data, 0, 150);
+}
+#endif
 
 } // namespace
 
@@ -225,11 +354,7 @@ static void metadata_write_queue_add(FileData *fd)
 
 	static guint metadata_write_idle_id = 0; /* event source id */
 
-	if (metadata_write_idle_id)
-		{
-		g_source_remove(metadata_write_idle_id);
-		metadata_write_idle_id = 0;
-		}
+	g_clear_handle_id(&metadata_write_idle_id, g_source_remove);
 
 	if (options->metadata.confirm_after_timeout)
 		{
@@ -272,7 +397,7 @@ void metadata_notify_cb(FileData *fd, NotifyType type, gpointer)
 		}
 }
 
-gboolean metadata_write_queue_confirm(gboolean force_dialog, FileUtilDoneFunc done_func, gpointer done_data)
+gboolean metadata_write_queue_confirm(gboolean force_dialog, const FileUtilDoneFunc &done_func)
 {
 	GList *work;
 	GList *to_approve = nullptr;
@@ -295,14 +420,14 @@ gboolean metadata_write_queue_confirm(gboolean force_dialog, FileUtilDoneFunc do
 		to_approve = g_list_prepend(to_approve, file_data_ref(fd));
 		}
 
-	file_util_write_metadata(nullptr, to_approve, nullptr, force_dialog, done_func, done_data);
+	file_util_write_metadata(nullptr, to_approve, nullptr, force_dialog, done_func);
 
 	return (metadata_write_queue != nullptr);
 }
 
 static gboolean metadata_write_queue_idle_cb(gpointer data)
 {
-	metadata_write_queue_confirm(FALSE, nullptr, nullptr);
+	metadata_write_queue_confirm(FALSE, nullptr);
 
 	auto *metadata_write_idle_id = static_cast<guint *>(data);
 	*metadata_write_idle_id = 0;
@@ -314,11 +439,10 @@ gboolean metadata_write_perform(FileData *fd)
 {
 	gboolean success;
 	ExifData *exif;
-	guint lf;
 
 	g_assert(fd->change);
 
-	lf = strlen(GQ_CACHE_EXT_METADATA);
+	static const size_t lf = strlen(GQ_CACHE_EXT_METADATA);
 	if (fd->change->dest &&
 	    g_ascii_strncasecmp(fd->change->dest + strlen(fd->change->dest) - lf, GQ_CACHE_EXT_METADATA, lf) == 0)
 		{
@@ -670,16 +794,16 @@ GList *metadata_read_list(FileData *fd, const gchar *key, MetadataFormat format)
 	else if (strcmp(key, COMMENT_KEY) == 0)
 		{
 		gchar *comment = nullptr;
-	        if (metadata_legacy_read(fd, nullptr, &comment)) return g_list_append(nullptr, comment);
-	        }
+		if (metadata_legacy_read(fd, nullptr, &comment)) return g_list_append(nullptr, comment);
+		}
 	else if (strncmp(key, "file.", 5) == 0)
 		{
-	        return g_list_append(nullptr, metadata_file_info(fd, key, format));
+		return g_list_append(nullptr, metadata_file_info(fd, key));
 		}
 #if HAVE_LUA
 	else if (strncmp(key, "lua.", 4) == 0)
 		{
-		return g_list_append(nullptr, metadata_lua_info(fd, key, format));
+		return g_list_append(nullptr, metadata_lua_info(fd, key));
 		}
 #endif
 
@@ -1012,7 +1136,7 @@ void meta_data_connect_mark_with_keyword(GtkTreeModel *keyword_tree, GtkTreeIter
 
 			if (keyword_tree_get_iter(keyword_tree, &old_kw_iter, old_path) &&
 			    (i == mark || /* release any previous connection of given mark */
-			     keyword_compare(keyword_tree, &old_kw_iter, kw_iter) == 0)) /* or given keyword */
+			     keyword_equal(keyword_tree, &old_kw_iter, kw_iter))) /* or given keyword */
 				{
 				file_data_register_mark_func(i, nullptr, nullptr, nullptr, nullptr);
 				gtk_tree_store_set(GTK_TREE_STORE(keyword_tree), &old_kw_iter, KEYWORD_COLUMN_MARK, "", -1);
@@ -1078,14 +1202,12 @@ void keyword_set(GtkTreeStore *keyword_tree, GtkTreeIter *iter, const gchar *nam
 						KEYWORD_COLUMN_IS_KEYWORD, is_keyword, -1);
 }
 
-gboolean keyword_compare(GtkTreeModel *keyword_tree, GtkTreeIter *a, GtkTreeIter *b)
+gboolean keyword_equal(GtkTreeModel *keyword_tree, GtkTreeIter *a, GtkTreeIter *b)
 {
-	GtkTreePath *pa = gtk_tree_model_get_path(keyword_tree, a);
-	GtkTreePath *pb = gtk_tree_model_get_path(keyword_tree, b);
-	gint ret = gtk_tree_path_compare(pa, pb);
-	gtk_tree_path_free(pa);
-	gtk_tree_path_free(pb);
-	return ret;
+	g_autoptr(GtkTreePath) pa = gtk_tree_model_get_path(keyword_tree, a);
+	g_autoptr(GtkTreePath) pb = gtk_tree_model_get_path(keyword_tree, b);
+
+	return gtk_tree_path_compare(pa, pb) == 0;
 }
 
 gboolean keyword_same_parent(GtkTreeModel *keyword_tree, GtkTreeIter *a, GtkTreeIter *b)
@@ -1098,7 +1220,7 @@ gboolean keyword_same_parent(GtkTreeModel *keyword_tree, GtkTreeIter *a, GtkTree
 
 	if (valid_pa && valid_pb)
 		{
-		return keyword_compare(keyword_tree, &parent_a, &parent_b) == 0;
+		return keyword_equal(keyword_tree, &parent_a, &parent_b);
 		}
 
 	return (!valid_pa && !valid_pb); /* both are toplevel */
@@ -1109,7 +1231,6 @@ gboolean keyword_exists(GtkTreeModel *keyword_tree, GtkTreeIter *parent_ptr, Gtk
 	GtkTreeIter parent;
 	GtkTreeIter iter;
 	gboolean toplevel = FALSE;
-	gboolean ret;
 
 	if (parent_ptr)
 		{
@@ -1127,30 +1248,28 @@ gboolean keyword_exists(GtkTreeModel *keyword_tree, GtkTreeIter *parent_ptr, Gtk
 	if (!gtk_tree_model_iter_children(GTK_TREE_MODEL(keyword_tree), &iter, toplevel ? nullptr : &parent)) return FALSE;
 
 	g_autofree gchar *casefold = g_utf8_casefold(name, -1);
-	ret = FALSE;
+	gboolean ret = FALSE;
 
-	while (TRUE)
+	do
 		{
-		if (!exclude_sibling || !sibling || keyword_compare(keyword_tree, &iter, sibling) != 0)
+		if (exclude_sibling && sibling && keyword_equal(keyword_tree, &iter, sibling)) continue;
+
+		if (options->metadata.keywords_case_sensitive)
 			{
-			if (options->metadata.keywords_case_sensitive)
-				{
-				g_autofree gchar *iter_name = keyword_get_name(keyword_tree, &iter);
-				ret = strcmp(name, iter_name) == 0;
-				}
-			else
-				{
-				g_autofree gchar *iter_casefold = keyword_get_casefold(keyword_tree, &iter);
-				ret = strcmp(casefold, iter_casefold) == 0;
-				} // if (options->metadata.tags_cas...
+			g_autofree gchar *iter_name = keyword_get_name(keyword_tree, &iter);
+			ret = strcmp(name, iter_name) == 0;
 			}
-		if (ret)
+		else
 			{
-			if (result) *result = iter;
-			break;
+			g_autofree gchar *iter_casefold = keyword_get_casefold(keyword_tree, &iter);
+			ret = strcmp(casefold, iter_casefold) == 0;
 			}
-		if (!gtk_tree_model_iter_next(keyword_tree, &iter)) break;
+
+		if (ret) break;
 		}
+	while (gtk_tree_model_iter_next(keyword_tree, &iter));
+
+	if (ret && result) *result = iter;
 
 	return ret;
 }
@@ -1660,12 +1779,12 @@ static void keyword_tree_node_write_config(GtkTreeModel *keyword_tree, GtkTreeIt
 
 		WRITE_NL(); WRITE_STRING("<keyword ");
 		g_autofree gchar *name = keyword_get_name(keyword_tree, &iter);
-		write_char_option(outstr, "name", name);
-		write_bool_option(outstr, "kw", keyword_get_is_keyword(keyword_tree, &iter));
+		WRITE_CHAR_FULL("name", name);
+		WRITE_BOOL_FULL("kw", keyword_get_is_keyword(keyword_tree, &iter));
 		g_autofree gchar *mark_str = keyword_get_mark(keyword_tree, &iter);
 		if (mark_str && mark_str[0])
 			{
-			write_char_option(outstr, "mark", mark_str);
+			WRITE_CHAR_FULL("mark", mark_str);
 			}
 
 		if (gtk_tree_model_iter_children(keyword_tree, &children, &iter))

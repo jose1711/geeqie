@@ -47,7 +47,7 @@ struct ImageLoaderTiff : public ImageLoaderBackend
 public:
 	~ImageLoaderTiff() override;
 
-	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data) override;
+	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data) override;
 	void set_size(int width, int height) override;
 	gboolean write(const guchar *buf, gsize &chunk_size, gsize count, GError **error) override;
 	GdkPixbuf *get_pixbuf() override;
@@ -60,7 +60,6 @@ public:
 private:
 	AreaUpdatedCb area_updated_cb;
 	SizePreparedCb size_prepared_cb;
-	AreaPreparedCb area_prepared_cb;
 	gpointer data;
 
 	GdkPixbuf *pixbuf;
@@ -79,11 +78,6 @@ struct GqTiffContext
 	toff_t used;
 	toff_t pos;
 };
-
-void free_buffer (guchar *pixels, gpointer)
-{
-	g_free (pixels);
-}
 
 tsize_t tiff_load_read (thandle_t handle, tdata_t buf, tsize_t size)
 {
@@ -243,9 +237,9 @@ gboolean ImageLoaderTiff::write(const guchar *buf, gsize &chunk_size, gsize coun
 		return FALSE;
 		}
 
-	pixbuf = gdk_pixbuf_new_from_data (pixels, GDK_COLORSPACE_RGB, TRUE, 8,
-										   width, height, rowstride,
-										   free_buffer, nullptr);
+	pixbuf = gdk_pixbuf_new_from_data(pixels, GDK_COLORSPACE_RGB, TRUE, 8,
+	                                  width, height, rowstride,
+	                                  free_pixels, nullptr);
 	if (!pixbuf)
 		{
 		g_free (pixels);
@@ -253,8 +247,6 @@ gboolean ImageLoaderTiff::write(const guchar *buf, gsize &chunk_size, gsize coun
 		TIFFClose(tiff);
 		return FALSE;
 		}
-
-	area_prepared_cb(nullptr, data);
 
 	if (TIFFGetField(tiff, TIFFTAG_ROWSPERSTRIP, &rowsperstrip))
 		{
@@ -315,7 +307,7 @@ gboolean ImageLoaderTiff::write(const guchar *buf, gsize &chunk_size, gsize coun
 
 #if G_BYTE_ORDER == G_BIG_ENDIAN
 		/* Turns out that the packing used by TIFFRGBAImage depends on
-		 * the host byte order...
+		 * the host byte order…
 		 */
 		{
 		guchar *ptr = pixels;
@@ -343,11 +335,10 @@ gboolean ImageLoaderTiff::write(const guchar *buf, gsize &chunk_size, gsize coun
 }
 
 
-void ImageLoaderTiff::init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data)
+void ImageLoaderTiff::init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data)
 {
 	this->area_updated_cb = area_updated_cb;
 	this->size_prepared_cb = size_prepared_cb;
-	this->area_prepared_cb = area_prepared_cb;
 	this->data = data;
 }
 

@@ -38,6 +38,7 @@
 #include "exif.h"
 #include "filedata.h"
 #include "filefilter.h"
+#include "history-list.h"
 #include "image.h"
 #include "intl.h"
 #include "main-defines.h"
@@ -47,6 +48,7 @@
 #include "thumb-standard.h"
 #include "trash.h"
 #include "ui-bookmark.h"
+#include "ui-file-chooser.h"
 #include "ui-fileops.h"
 #include "ui-misc.h"
 #include "ui-utildlg.h"
@@ -83,6 +85,8 @@ constexpr std::array<GtkTargetEntry, 4> target_types
 	{const_cast<gchar *>("UTF8_STRING"), 0, CLIPBOARD_UTF8_STRING},
 }};
 
+constexpr gint GQ_RESPONSE_WITH_RENAME = 1;
+
 constexpr gint DIALOG_DEF_IMAGE_DIM_X = 150;
 constexpr gint DIALOG_DEF_IMAGE_DIM_Y = 100;
 
@@ -95,6 +99,9 @@ constexpr gint DIALOG_WIDTH = 750;
  */
 constexpr gint RENAME_WINDOW_WIDTH = 625;
 constexpr gint RENAME_WINDOW_HEIGHT = 635;
+
+constexpr gint PROGRESS_WINDOW_WIDTH = 450;
+constexpr gint PROGRESS_WINDOW_HEIGHT = 150;
 
 /* thumbnail spec has a max depth of 4 (.thumb??/fail/appname/??.png) */
 constexpr gint UTILITY_DELETE_MAX_DEPTH = 5;
@@ -188,7 +195,7 @@ static void generic_dialog_add_image(GenericDialog *gd, GtkWidget *box,
 		}
 
 	imd = image_new(FALSE);
-	g_object_set(G_OBJECT(imd->pr), "zoom_expand", FALSE, NULL);
+	g_object_set(imd->pr, "zoom_expand", FALSE, NULL);
 	gtk_widget_set_size_request(imd->widget, DIALOG_DEF_IMAGE_DIM_X, DIALOG_DEF_IMAGE_DIM_Y);
 	gq_gtk_box_pack_start(GTK_BOX(vbox), imd->widget, TRUE, TRUE, 0);
 	image_change_fd(imd, fd1, 0.0);
@@ -221,7 +228,7 @@ static void generic_dialog_add_image(GenericDialog *gd, GtkWidget *box,
 			}
 
 		imd = image_new(FALSE);
-		g_object_set(G_OBJECT(imd->pr), "zoom_expand", FALSE, NULL);
+		g_object_set(imd->pr, "zoom_expand", FALSE, NULL);
 		gtk_widget_set_size_request(imd->widget, DIALOG_DEF_IMAGE_DIM_X, DIALOG_DEF_IMAGE_DIM_Y);
 		gq_gtk_box_pack_start(GTK_BOX(vbox), imd->widget, TRUE, TRUE, 0);
 		if (fd2) image_change_fd(imd, fd2, 0.0);
@@ -270,44 +277,10 @@ GenericDialog *file_util_gen_dlg(const gchar *title,
 	return gd;
 }
 
-/**
- * @brief
- * @param title
- * @param role
- * @param parent
- * @param cancel_cb
- * @param data
- * @returns
- *
- * \image html file_util_file_dlg.png 'Typical implementation including optional filter, buttons and path widgets' width=300
- */
-FileDialog *file_util_file_dlg(const gchar *title,
-			       const gchar *role,
-			       GtkWidget *parent,
-			       void (*cancel_cb)(FileDialog *, gpointer), gpointer data)
-{
-	FileDialog *fdlg;
-
-	fdlg = file_dialog_new(title, role, parent, cancel_cb, data);
-	if (options->place_dialogs_under_mouse)
-		{
-		gq_gtk_window_set_position(GTK_WINDOW(GENERIC_DIALOG(fdlg)->dialog), GTK_WIN_POS_MOUSE);
-		}
-
-	gtk_window_set_modal(GTK_WINDOW(fdlg->gd.dialog), TRUE);
-
-	return fdlg;
-}
-
 /* this warning dialog is copied from SLIK's ui_utildg.c,
  * because it does not have a mouse center option,
  * and we must center it before show, implement it here.
  */
-static void file_util_warning_dialog_ok_cb(GenericDialog *, gpointer)
-{
-	/* no op */
-}
-
 GenericDialog *file_util_warning_dialog(const gchar *heading, const gchar *message,
 					const gchar *icon_name, GtkWidget *parent)
 {
@@ -315,7 +288,7 @@ GenericDialog *file_util_warning_dialog(const gchar *heading, const gchar *messa
 
 	gd = file_util_gen_dlg(heading, "warning", parent, TRUE, nullptr, nullptr);
 	generic_dialog_add_message(gd, icon_name, heading, message, TRUE);
-	generic_dialog_add_button(gd, GQ_ICON_OK, "OK", file_util_warning_dialog_ok_cb, TRUE);
+	generic_dialog_add_button(gd, GQ_ICON_OK, "OK", generic_dialog_dummy_cb, TRUE);
 	if (options->place_dialogs_under_mouse)
 		{
 		gq_gtk_window_set_position(GTK_WINDOW(gd->dialog), GTK_WIN_POS_MOUSE);
@@ -396,7 +369,7 @@ struct UtilityData {
 
 	GtkWidget *parent;
 	GenericDialog *gd;
-	FileDialog *fdlg;
+	GtkFileChooserDialog *fdlg;
 
 	guint update_idle_id; /* event source id */
 	guint perform_idle_id; /* event source id */
@@ -433,7 +406,17 @@ struct UtilityData {
 	void (*details_func)(UtilityData *ud, FileData *fd);
 	gboolean (*finalize_func)(FileData *fd);
 	gboolean (*discard_func)(FileData *fd);
-	gpointer done_data;
+
+	/* progress dialog */
+	GenericDialog *progress_gd;
+	GtkWidget *progress_label;
+	GtkWidget *progress_bar;
+	GtkWidget *progress_spinner;
+	GtkWidget *progress_button_stop;
+	GtkWidget *progress_button_close;
+	gint files_completed;
+	gint files_total;
+	gboolean cancelled;
 };
 
 enum {
@@ -529,6 +512,7 @@ static void file_util_data_free(UtilityData *ud)
 	file_data_list_free(ud->flist);
 
 	if (ud->gd) generic_dialog_close(ud->gd);
+	if (ud->progress_gd) generic_dialog_close(ud->progress_gd);
 
 	g_free(ud->dest_path);
 	g_free(ud->external_command);
@@ -580,11 +564,10 @@ static void file_util_dialog_list_select(GtkWidget *view, gint n)
 
 static GtkWidget *file_util_dialog_add_list(GtkWidget *box, GList *list, gboolean full_paths, gboolean with_sidecars)
 {
-	GtkWidget *scrolled;
 	GtkWidget *view;
 	GtkListStore *store;
 
-	scrolled = gq_gtk_scrolled_window_new(nullptr, nullptr);
+	GtkWidget *scrolled = gq_gtk_scrolled_window_new(nullptr, nullptr);
 	gq_gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(scrolled), GTK_SHADOW_IN);
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
 				       GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -610,7 +593,7 @@ static GtkWidget *file_util_dialog_add_list(GtkWidget *box, GList *list, gboolea
 		}
 
 	gtk_widget_set_size_request(view, UTILITY_LIST_MIN_WIDTH, UTILITY_LIST_MIN_HEIGHT);
-	gq_gtk_container_add(GTK_WIDGET(scrolled), view);
+	gq_gtk_container_add(scrolled, view);
 	gtk_widget_show(view);
 
 	while (list)
@@ -662,6 +645,167 @@ static void file_util_abort_cb(GenericDialog *, gpointer data)
 	else
 		file_util_perform_ci_cb(nullptr, EDITOR_ERROR_SKIPPED, ud->flist, ud);
 
+}
+
+/* Progress dialog functions */
+
+static void file_util_progress_close_cb(GenericDialog *gd, gpointer data)
+{
+	auto ud = static_cast<UtilityData *>(data);
+
+	generic_dialog_close(gd);
+	ud->progress_gd = nullptr;
+	ud->progress_label = nullptr;
+	ud->progress_bar = nullptr;
+	ud->progress_spinner = nullptr;
+	ud->progress_button_stop = nullptr;
+	ud->progress_button_close = nullptr;
+}
+
+static void file_util_progress_cancel_cb(GenericDialog *, gpointer data)
+{
+	auto ud = static_cast<UtilityData *>(data);
+	ud->cancelled = TRUE;
+
+	if (ud->progress_button_stop)
+		gtk_widget_set_sensitive(ud->progress_button_stop, FALSE);
+	if (ud->progress_label)
+		gtk_label_set_text(GTK_LABEL(ud->progress_label), _("Cancelling…"));
+}
+
+static void file_util_progress_enable_close(UtilityData *ud)
+{
+	if (!ud->progress_gd) return;
+
+	ud->progress_gd->cancel_cb = file_util_progress_close_cb;
+
+	if (ud->progress_spinner)
+		gtk_spinner_stop(GTK_SPINNER(ud->progress_spinner));
+	if (ud->progress_button_stop)
+		gtk_widget_set_sensitive(ud->progress_button_stop, FALSE);
+	if (ud->progress_button_close)
+		gtk_widget_set_sensitive(ud->progress_button_close, TRUE);
+}
+
+static void file_util_progress_window_new(UtilityData *ud)
+{
+	GtkWidget *hbox;
+	const gchar *title = nullptr;
+
+	/* Don't show progress for very few files */
+	if (ud->files_total < 2) return;
+
+	/* Determine dialog title based on operation type */
+	switch (ud->type)
+		{
+		case UtilityType::COPY:
+			title = _("Copying files");
+			break;
+		case UtilityType::MOVE:
+			title = _("Moving files");
+			break;
+		case UtilityType::DELETE:
+		case UtilityType::DELETE_LINK:
+		case UtilityType::DELETE_FOLDER:
+			title = _("Deleting files");
+			break;
+		case UtilityType::RENAME:
+			title = _("Renaming files");
+			break;
+		default:
+			title = _("Processing files");
+			break;
+		}
+
+	ud->progress_gd = file_util_gen_dlg(title, "file_operation_progress", ud->parent, FALSE, nullptr, ud);
+
+	ud->progress_button_stop = generic_dialog_add_button(ud->progress_gd, GQ_ICON_STOP, _("Stop"),
+	                                                      file_util_progress_cancel_cb, FALSE);
+	gtk_widget_set_sensitive(ud->progress_button_stop, TRUE);
+
+	ud->progress_button_close = generic_dialog_add_button(ud->progress_gd, GQ_ICON_CLOSE, _("Close"),
+	                                                       file_util_progress_close_cb, TRUE);
+	gtk_widget_set_sensitive(ud->progress_button_close, FALSE);
+
+	/* Status label */
+	ud->progress_label = gtk_label_new(_("Starting…"));
+	gtk_label_set_xalign(GTK_LABEL(ud->progress_label), 0.0);
+	gtk_label_set_ellipsize(GTK_LABEL(ud->progress_label), PANGO_ELLIPSIZE_MIDDLE);
+	gq_gtk_box_pack_start(GTK_BOX(ud->progress_gd->vbox), ud->progress_label, FALSE, FALSE, 5);
+	gtk_widget_show(ud->progress_label);
+
+	/* Progress bar and spinner in hbox */
+	hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gq_gtk_box_pack_start(GTK_BOX(ud->progress_gd->vbox), hbox, FALSE, FALSE, 0);
+	gtk_widget_show(hbox);
+
+	ud->progress_bar = gtk_progress_bar_new();
+	gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ud->progress_bar), 0.0);
+	gtk_progress_bar_set_show_text(GTK_PROGRESS_BAR(ud->progress_bar), TRUE);
+	gq_gtk_box_pack_start(GTK_BOX(hbox), ud->progress_bar, TRUE, TRUE, 0);
+	gtk_widget_show(ud->progress_bar);
+
+	ud->progress_spinner = gtk_spinner_new();
+	gtk_spinner_start(GTK_SPINNER(ud->progress_spinner));
+	gq_gtk_box_pack_start(GTK_BOX(hbox), ud->progress_spinner, FALSE, FALSE, 5);
+	gtk_widget_show(ud->progress_spinner);
+
+	/* Set default window size */
+	gq_gtk_window_resize(GTK_WINDOW(ud->progress_gd->dialog), PROGRESS_WINDOW_WIDTH, PROGRESS_WINDOW_HEIGHT);
+
+	gtk_widget_show(ud->progress_gd->dialog);
+}
+
+static void file_util_progress_update(UtilityData *ud)
+{
+	if (!ud->progress_gd) return;
+
+	gdouble fraction = (ud->files_total > 0) ? static_cast<gdouble>(ud->files_completed) / ud->files_total : 0.0;
+
+	gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ud->progress_bar), fraction);
+
+	g_autofree gchar *progress_text = g_strdup_printf(_("%d of %d files"), ud->files_completed, ud->files_total);
+	gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ud->progress_bar), progress_text);
+
+	/* Update current file label if we have a current file */
+	if (ud->flist && ud->flist->data)
+		{
+		auto fd = static_cast<FileData *>(ud->flist->data);
+		g_autofree gchar *label_text = nullptr;
+
+		/* Show sidecars (e.g., RAW+JPG) if processing with sidecars */
+		if (ud->with_sidecars && fd->sidecar_files)
+			{
+			g_autofree gchar *sidecars = file_data_sc_list_to_string(fd);
+			label_text = g_strdup_printf(_("Processing: %s %s"), fd->name, sidecars);
+			}
+		else
+			{
+			label_text = g_strdup_printf(_("Processing: %s"), fd->name);
+			}
+
+		gtk_label_set_text(GTK_LABEL(ud->progress_label), label_text);
+		}
+}
+
+static void file_util_progress_close(UtilityData *ud)
+{
+	if (!ud->progress_gd) return;
+
+	/* Update to show completion */
+	if (ud->cancelled)
+		{
+		gtk_label_set_text(GTK_LABEL(ud->progress_label), _("Operation cancelled"));
+		}
+	else
+		{
+		gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ud->progress_bar), 1.0);
+		g_autofree gchar *text = g_strdup_printf(_("%d files completed"), ud->files_total);
+		gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ud->progress_bar), text);
+		gtk_label_set_text(GTK_LABEL(ud->progress_label), _("Operation completed"));
+		}
+
+	file_util_progress_enable_close(ud);
 }
 
 
@@ -734,11 +878,16 @@ static gint file_util_perform_ci_cb(gpointer resume_data, EditorFlags flags, GLi
 		else
 			file_data_free_ci(fd);
 		file_data_unref(fd);
+
+		/* Update progress */
+		ud->files_completed++;
+		file_util_progress_update(ud);
 		}
 
 	if (!resume_data) /* end of the list */
 		{
 		ud->phase = UtilityPhase::DONE;
+		file_util_progress_close(ud);
 		file_util_dialog_run(ud);
 		}
 
@@ -765,6 +914,21 @@ static gboolean file_util_perform_ci_internal(gpointer data)
 		/* this is removed when ud is destroyed */
 		ud->perform_idle_id = g_idle_add(file_util_perform_ci_internal, ud);
 		return G_SOURCE_CONTINUE;
+		}
+
+	/* Initialize progress dialog on first call */
+	if (ud->files_total == 0 && ud->flist)
+		{
+		ud->files_total = g_list_length(ud->flist);
+		ud->files_completed = 0;
+		file_util_progress_window_new(ud);
+		}
+
+	/* Check if operation was cancelled */
+	if (ud->cancelled)
+		{
+		file_util_perform_ci_cb(nullptr, EDITOR_ERROR_SKIPPED, ud->flist, ud);
+		return G_SOURCE_REMOVE;
 		}
 
 	g_assert(ud->flist);
@@ -1121,22 +1285,14 @@ static void file_util_ok_cb(GenericDialog *gd, gpointer data)
 	file_util_dialog_run(ud);
 }
 
-static void file_util_fdlg_cancel_cb(FileDialog *fdlg, gpointer data)
-{
-	auto ud = static_cast<UtilityData *>(data);
-
-	file_dialog_close(fdlg);
-
-	ud->fdlg = nullptr;
-
-	ud->phase = UtilityPhase::CANCEL;
-	file_util_dialog_run(ud);
-}
-
 static void file_util_dest_folder_update_path(UtilityData *ud)
 {
 	g_free(ud->dest_path);
-	ud->dest_path = g_strdup(gq_gtk_entry_get_text(GTK_ENTRY(ud->fdlg->entry)));
+
+	g_autoptr(GFile) file = gtk_file_chooser_get_file(GTK_FILE_CHOOSER(ud->fdlg));
+	gchar *path = g_file_get_path(file);
+
+	ud->dest_path = path;
 
 	switch (ud->type)
 		{
@@ -1160,30 +1316,25 @@ static void file_util_dest_folder_update_path(UtilityData *ud)
 		}
 }
 
-static void file_util_fdlg_rename_cb(FileDialog *fdlg, gpointer data)
+static void file_util_fdlg_rename_cb(GtkFileChooserDialog *chooser, gpointer data)
 {
 	auto ud = static_cast<UtilityData *>(data);
 	GenericDialog *d = nullptr;
 
 	file_util_dest_folder_update_path(ud);
+
 	if (isdir(ud->dest_path))
 		{
-		file_dialog_sync_history(fdlg, TRUE);
-		file_dialog_close(fdlg);
+		gq_gtk_widget_destroy(GTK_WIDGET(chooser));
+
 		ud->fdlg = nullptr;
 		file_util_dialog_run(ud);
-
-		GdkRectangle rect;
-		if (!options->save_dialog_window_positions || !generic_dialog_find_window("Rename", "dlg_confirm", rect))
-			{
-			gtk_window_resize(GTK_WINDOW(ud->gd->dialog), RENAME_WINDOW_WIDTH, RENAME_WINDOW_HEIGHT);
-			}
 		}
 	else
 		{
 		/* During copy/move operations it is necessary to ensure that the
 		 * target directory exists before continuing with the next step.
-		 * If not revert to the select directory dialog
+		 * If not revert to the select directory dialog_
 		 */
 		g_autofree gchar *desc = g_strdup_printf(_("%s is not a directory"), ud->dest_path);
 
@@ -1195,29 +1346,71 @@ static void file_util_fdlg_rename_cb(FileDialog *fdlg, gpointer data)
 		gtk_widget_show(d->dialog);
 		ud->phase = UtilityPhase::START;
 
-		file_dialog_close(fdlg);
+		gq_gtk_widget_destroy(GTK_WIDGET(chooser));
 		ud->fdlg = nullptr;
 		}
 }
 
-static void file_util_fdlg_ok_cb(FileDialog *fdlg, gpointer data)
+static void file_util_fdlg_ok_cb(GtkFileChooserDialog *chooser, gint response_id, gpointer data)
 {
 	auto ud = static_cast<UtilityData *>(data);
 
-	file_util_dest_folder_update_path(ud);
-	if (isdir(ud->dest_path)) file_dialog_sync_history(fdlg, TRUE);
-	file_dialog_close(fdlg);
+	if (response_id == GTK_RESPONSE_ACCEPT)
+		{
 
-	ud->fdlg = nullptr;
-	ud->phase = UtilityPhase::ENTERING;
+		g_autoptr(GFile) file = gtk_file_chooser_get_file(GTK_FILE_CHOOSER(chooser));
+		if (file != nullptr)
+			{
+			g_autoptr(GFile) file = gtk_file_chooser_get_file(GTK_FILE_CHOOSER(chooser));
+			g_autofree gchar *path = g_file_get_path(file);
 
-	file_util_dialog_run(ud);
-}
+			file_util_dest_folder_update_path(ud);
 
-static void file_util_dest_folder_entry_cb(GtkWidget *, gpointer data)
-{
-	auto ud = static_cast<UtilityData *>(data);
-	file_util_dest_folder_update_path(ud);
+			if (file)
+				{
+				g_autoptr(GFile) parent = nullptr;
+
+				if (g_file_query_file_type(file, G_FILE_QUERY_INFO_NONE, nullptr) == G_FILE_TYPE_REGULAR)
+					{
+					parent = g_file_get_parent(file);
+					}
+
+				if (parent)
+					{
+					g_autofree gchar *dirname = g_file_get_path(parent);
+					history_list_add_to_key("move_copy", dirname, -1);
+					}
+				else
+					{
+					history_list_add_to_key("move_copy", path, -1);
+					}
+				}
+			}
+
+		gq_gtk_widget_destroy(GTK_WIDGET(chooser));
+
+		ud->fdlg = nullptr;
+		ud->phase = UtilityPhase::ENTERING;
+
+		file_util_dialog_run(ud);
+		}
+	else if (response_id == GQ_RESPONSE_WITH_RENAME)
+		{
+		file_util_dest_folder_update_path(ud);
+		ud->dest_path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(ud->fdlg));
+		file_util_fdlg_rename_cb(chooser, ud);
+		gq_gtk_widget_destroy(GTK_WIDGET(ud->fdlg));
+		}
+	else
+		{
+		auto ud = static_cast<UtilityData *>(data);
+
+		gq_gtk_widget_destroy(GTK_WIDGET(chooser));
+		ud->fdlg = nullptr;
+
+		ud->phase = UtilityPhase::CANCEL;
+		file_util_dialog_run(ud);
+		}
 }
 
 /* format: * = filename without extension, ## = number position, extension is kept */
@@ -1279,8 +1472,6 @@ static void file_util_rename_preview_update(UtilityData *ud)
 	GtkTreeSelection *selection;
 	GtkTreeIter iter;
 	GtkTreeIter iter_selected;
-	GtkTreePath *path_iter;
-	GtkTreePath *path_selected;
 	const gchar *front;
 	const gchar *end;
 	const gchar *format;
@@ -1388,14 +1579,12 @@ static void file_util_rename_preview_update(UtilityData *ud)
 
 			selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(ud->listview));
 			gtk_tree_selection_get_selected(selection, &store, &iter_selected);
-			path_iter=gtk_tree_model_get_path(store,&iter);
-			path_selected=gtk_tree_model_get_path(store,&iter_selected);
-			if (!gtk_tree_path_compare(path_iter,path_selected))
+			g_autoptr(GtkTreePath) path_iter = gtk_tree_model_get_path(store, &iter);
+			g_autoptr(GtkTreePath) path_selected = gtk_tree_model_get_path(store, &iter_selected);
+			if (!gtk_tree_path_compare(path_iter, path_selected))
 				{
 				generic_dialog_image_set(ud, fd);
 				}
-			gtk_tree_path_free(path_iter);
-			gtk_tree_path_free(path_selected);
 
 			gtk_list_store_set(GTK_LIST_STORE(store), &iter,
 					   UTILITY_COLUMN_DEST_PATH, fd->change->dest,
@@ -1430,7 +1619,7 @@ static void file_util_rename_preview_entry_cb(GtkWidget *, gpointer data)
 	file_util_rename_preview_update(ud);
 }
 
-static void file_util_rename_preview_adj_cb(GtkWidget *, gpointer data)
+static void file_util_rename_preview_adj_cb(GtkSpinButton *, gpointer data)
 {
 	auto ud = static_cast<UtilityData *>(data);
 	file_util_rename_preview_update(ud);
@@ -1578,51 +1767,25 @@ static void file_util_dialog_init_simple_list(UtilityData *ud)
 
 static void file_util_dialog_init_dest_folder(UtilityData *ud)
 {
-	FileDialog *fdlg;
-	GtkWidget *label;
-	const gchar *icon_name;
+	FileChooserDialogData fcdd{};
 
-	if (ud->type == UtilityType::COPY)
-		{
-		icon_name = GQ_ICON_COPY;
-		}
-	else
-		{
-		icon_name = GQ_ICON_OK;
-		}
+	fcdd.action = GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
+	fcdd.accept_text = (ud->type == UtilityType::MOVE) ? _("Move") : _("Copy");
+	fcdd.data = ud;
+	fcdd.history_key = "move_copy";
+	fcdd.response_callback = G_CALLBACK(file_util_fdlg_ok_cb);
+	fcdd.title = (ud->type == UtilityType::MOVE) ? _("Geeqie - Move File") : _("Geeqie - Copy File");
 
-	fdlg = file_util_file_dlg(ud->messages.title, "dlg_dest_folder", ud->parent,
-				  file_util_fdlg_cancel_cb, ud);
+	GtkFileChooserDialog *dialog = file_chooser_dialog_new(fcdd);
 
-	ud->fdlg = fdlg;
+	ud->fdlg = dialog;
 
-	generic_dialog_add_message(GENERIC_DIALOG(fdlg), nullptr, ud->messages.question, nullptr, FALSE);
+	GtkWidget *with_rename = gtk_button_new_with_label(_("With Rename"));
 
-	label = pref_label_new(GENERIC_DIALOG(fdlg)->vbox, _("Choose the destination folder."));
-	gtk_label_set_xalign(GTK_LABEL(label), 0.0);
-	gtk_label_set_yalign(GTK_LABEL(label), 0.5);
+	gtk_dialog_add_action_widget(GTK_DIALOG(dialog), with_rename, GQ_RESPONSE_WITH_RENAME);
 
-	pref_spacer(GENERIC_DIALOG(fdlg)->vbox, 0);
-
-	if (options->with_rename)
-		{
-		file_dialog_add_button(fdlg, icon_name, ud->messages.title, file_util_fdlg_ok_cb, TRUE);
-		file_dialog_add_button(fdlg, GQ_ICON_EDIT, _("With Rename"), file_util_fdlg_rename_cb, TRUE);
-		}
-	else
-		{
-		file_dialog_add_button(fdlg, GQ_ICON_EDIT, _("With Rename"), file_util_fdlg_rename_cb, TRUE);
-		file_dialog_add_button(fdlg, icon_name, ud->messages.title, file_util_fdlg_ok_cb, TRUE);
-		}
-
-	file_dialog_add_path_widgets(fdlg, nullptr, ud->dest_path, "move_copy", nullptr, nullptr);
-
-	g_signal_connect(G_OBJECT(fdlg->entry), "changed",
-			 G_CALLBACK(file_util_dest_folder_entry_cb), ud);
-
-	gtk_widget_show(GENERIC_DIALOG(fdlg)->dialog);
+	gq_gtk_widget_show_all(GTK_WIDGET(dialog));
 }
-
 
 static GtkWidget *furm_simple_vlabel(GtkWidget *box, const gchar *text, gboolean expand)
 {
@@ -1640,11 +1803,9 @@ static GtkWidget *furm_simple_vlabel(GtkWidget *box, const gchar *text, gboolean
 	return vbox;
 }
 
-
 static void file_util_dialog_init_source_dest(UtilityData *ud, gboolean second_image)
 {
 	GtkTreeModel *store;
-	GtkTreeSelection *selection;
 	GtkWidget *box;
 	GtkWidget *hbox;
 	GtkWidget *box2;
@@ -1679,8 +1840,8 @@ static void file_util_dialog_init_source_dest(UtilityData *ud, gboolean second_i
 
 	file_util_dialog_add_list_column(ud->listview, _("New name"), FALSE, UTILITY_COLUMN_DEST_NAME);
 
-	selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(ud->listview));
-	gtk_tree_selection_set_mode(GTK_TREE_SELECTION(selection), GTK_SELECTION_SINGLE);
+	GtkTreeSelection *selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(ud->listview));
+	gtk_tree_selection_set_mode(selection, GTK_SELECTION_SINGLE);
 	gtk_tree_selection_set_select_function(selection, file_util_preview_cb, ud, nullptr);
 
 	gtk_tree_view_set_reorderable(GTK_TREE_VIEW(ud->listview), TRUE);
@@ -1858,7 +2019,7 @@ void file_util_dialog_run(UtilityData *ud)
 					GdkRectangle rect;
 					if (!options->save_dialog_window_positions || !generic_dialog_find_window("Rename", "dlg_confirm", rect))
 						{
-						gtk_window_resize(GTK_WINDOW(ud->gd->dialog), RENAME_WINDOW_WIDTH, RENAME_WINDOW_HEIGHT);
+						gq_gtk_window_resize(GTK_WINDOW(ud->gd->dialog), RENAME_WINDOW_WIDTH, RENAME_WINDOW_HEIGHT);
 						}
 					ud->phase = UtilityPhase::ENTERING;
 					break;
@@ -1902,7 +2063,7 @@ void file_util_dialog_run(UtilityData *ud)
 
 			/* both DISCARD and DONE finishes the operation for good */
 			if (ud->done_func)
-				ud->done_func((ud->phase != UtilityPhase::CANCEL), ud->dest_path, ud->done_data);
+				ud->done_func((ud->phase != UtilityPhase::CANCEL), ud->dest_path);
 
 			if (ud->with_sidecars)
 				file_data_sc_free_ci_list(ud->flist);
@@ -1928,7 +2089,7 @@ static void file_util_warn_op_in_progress(const gchar *title)
 
 static void file_util_details_dialog_close_cb(GtkWidget *, gpointer data)
 {
-	gq_gtk_widget_destroy(GTK_WIDGET(data));
+	gq_gtk_widget_destroy(static_cast<GtkWidget *>(data));
 }
 
 static void file_util_details_dialog_destroy_cb(GtkWidget *widget, gpointer data)
@@ -1937,11 +2098,6 @@ static void file_util_details_dialog_destroy_cb(GtkWidget *widget, gpointer data
 	g_signal_handlers_disconnect_by_func(ud->gd->dialog, (gpointer)(file_util_details_dialog_close_cb), widget);
 }
 
-
-static void file_util_details_dialog_ok_cb(GenericDialog *, gpointer)
-{
-	/* no op */
-}
 
 static void file_util_details_dialog_exclude(GenericDialog *gd, gpointer data, gboolean discard)
 {
@@ -2019,7 +2175,7 @@ static void file_util_details_dialog(UtilityData *ud, FileData *fd)
 	const gchar *icon_name;
 
 	gd = file_util_gen_dlg(_("File details"), "details", ud->gd->dialog, TRUE, nullptr, ud);
-	generic_dialog_add_button(gd, GQ_ICON_CLOSE, _("Close"), file_util_details_dialog_ok_cb, TRUE);
+	generic_dialog_add_button(gd, GQ_ICON_CLOSE, _("Close"), generic_dialog_dummy_cb, TRUE);
 	generic_dialog_add_button(gd, GQ_ICON_REMOVE, _("Exclude file"), file_util_details_dialog_exclude_cb, FALSE);
 
 	g_object_set_data(G_OBJECT(gd->dialog), "file_data", fd);
@@ -2062,7 +2218,7 @@ static void file_util_write_metadata_details_dialog(UtilityData *ud, FileData *f
 
 
 	gd = file_util_gen_dlg(_("Overview of changed metadata"), "details", ud->gd->dialog, TRUE, nullptr, ud);
-	generic_dialog_add_button(gd, GQ_ICON_CLOSE, _("Close"), file_util_details_dialog_ok_cb, TRUE);
+	generic_dialog_add_button(gd, GQ_ICON_CLOSE, _("Close"), generic_dialog_dummy_cb, TRUE);
 	generic_dialog_add_button(gd, GQ_ICON_REMOVE, _("Exclude file"), file_util_details_dialog_exclude_cb, FALSE);
 	generic_dialog_add_button(gd, GQ_ICON_REVERT, _("Discard changes"), file_util_details_dialog_discard_cb, FALSE);
 
@@ -2142,15 +2298,14 @@ static void file_util_mark_ungrouped_files(GList *work)
 		}
 }
 
-static void file_util_delete_full(FileData *source_fd, GList *flist, GtkWidget *parent, UtilityPhase phase, FileUtilDoneFunc done_func, gpointer done_data)
+static void file_util_delete_full(FileData *source_fd, GList *flist, GtkWidget *parent, gboolean safe_delete, UtilityPhase phase, const FileUtilDoneFunc &done_func)
 {
-	UtilityData *ud;
-	gchar *message;
-
 	if (source_fd)
 		flist = g_list_append(flist, file_data_ref(source_fd));
 
 	if (!flist) return;
+
+	options->file_ops.safe_delete_enable = safe_delete;
 
 	g_autoptr(FileDataList) ungrouped = nullptr;
 	flist = file_data_process_groups_in_selection(flist, TRUE, &ungrouped);
@@ -2165,7 +2320,7 @@ static void file_util_delete_full(FileData *source_fd, GList *flist, GtkWidget *
 
 	file_util_mark_ungrouped_files(ungrouped);
 
-	ud = file_util_data_new(UtilityType::DELETE);
+	UtilityData *ud = file_util_data_new(UtilityType::DELETE);
 
 	ud->phase = phase;
 
@@ -2175,13 +2330,14 @@ static void file_util_delete_full(FileData *source_fd, GList *flist, GtkWidget *
 	ud->flist = flist;
 	ud->content_list = nullptr;
 	ud->parent = parent;
-	ud->done_data = done_data;
 	ud->done_func = done_func;
 
 	ud->details_func = file_util_details_dialog;
 
+	const gchar *message;
 	if (g_list_length(flist) > 1)
 		{
+		// @fixme message from here is never freed
 		if(options->file_ops.safe_delete_enable)
 			{
 			message = g_strdup_printf("%s%d%s", _("⚠ This will move the following    "), g_list_length(flist), _("    files to the Trash bin"));
@@ -2214,7 +2370,7 @@ static void file_util_delete_full(FileData *source_fd, GList *flist, GtkWidget *
 }
 
 
-static void file_util_write_metadata_full(FileData *source_fd, GList *flist, GtkWidget *parent, UtilityPhase phase, FileUtilDoneFunc done_func, gpointer done_data)
+static void file_util_write_metadata_full(FileData *source_fd, GList *flist, GtkWidget *parent, UtilityPhase phase, const FileUtilDoneFunc &done_func)
 {
 	UtilityData *ud;
 
@@ -2242,7 +2398,6 @@ static void file_util_write_metadata_full(FileData *source_fd, GList *flist, Gtk
 	ud->parent = parent;
 
 	ud->done_func = done_func;
-	ud->done_data = done_data;
 
 	ud->details_func = file_util_write_metadata_details_dialog;
 	ud->finalize_func = metadata_write_queue_remove;
@@ -2801,7 +2956,7 @@ static gboolean file_util_rename_dir_prepare(UtilityData *ud, const gchar *new_p
 }
 
 
-static void file_util_rename_dir_full(FileData *fd, const gchar *new_path, GtkWidget *parent, UtilityPhase phase, FileUtilDoneFunc done_func, gpointer done_data)
+static void file_util_rename_dir_full(FileData *fd, const gchar *new_path, GtkWidget *parent, UtilityPhase phase, const FileUtilDoneFunc &done_func)
 {
 	UtilityData *ud;
 
@@ -2817,7 +2972,6 @@ static void file_util_rename_dir_full(FileData *fd, const gchar *new_path, GtkWi
 	ud->parent = parent;
 
 	ud->done_func = done_func;
-	ud->done_data = done_data;
 	ud->dest_path = g_strdup(new_path);
 
 	ud->messages.title = _("Rename");
@@ -2859,23 +3013,6 @@ static gboolean file_util_write_metadata_first_after_done(gpointer data)
 	return G_SOURCE_REMOVE;
 }
 
-static void file_util_write_metadata_first_done(gboolean success, const gchar *, gpointer data)
-{
-	auto dd = static_cast<UtilityDelayData *>(data);
-
-	if (success)
-		{
-		dd->idle_id = g_idle_add(file_util_write_metadata_first_after_done, dd);
-		return;
-		}
-
-	/* the operation was cancelled */
-	file_data_list_free(dd->flist);
-	g_free(dd->dest_path);
-	g_free(dd->editor_key);
-	g_free(dd);
-}
-
 static gboolean file_util_write_metadata_first(UtilityType type, UtilityPhase phase, GList *flist, const gchar *dest_path, const gchar *editor_key, GtkWidget *parent)
 {
 	GList *unsaved = nullptr;
@@ -2914,7 +3051,21 @@ static gboolean file_util_write_metadata_first(UtilityType type, UtilityPhase ph
 	dd->editor_key = g_strdup(editor_key);
 	dd->parent = parent;
 
-	file_util_write_metadata(nullptr, unsaved, parent, FALSE, file_util_write_metadata_first_done, dd);
+	const auto file_util_write_metadata_first_done = [dd](gboolean success, const gchar *)
+	{
+		if (success)
+			{
+			dd->idle_id = g_idle_add(file_util_write_metadata_first_after_done, dd);
+			return;
+			}
+
+		/* the operation was cancelled */
+		file_data_list_free(dd->flist);
+		g_free(dd->dest_path);
+		g_free(dd->editor_key);
+		g_free(dd);
+	};
+	file_util_write_metadata(nullptr, unsaved, parent, FALSE, file_util_write_metadata_first_done);
 	return TRUE;
 }
 
@@ -2922,28 +3073,23 @@ static gboolean file_util_write_metadata_first(UtilityType type, UtilityPhase ph
 /* full-featured entry points
 */
 
-void file_util_delete(FileData *source_fd, GList *source_list, GtkWidget *parent)
+void file_util_delete(FileData *source_fd, GList *source_list, GtkWidget *parent, gboolean safe_delete)
 {
-	if (options->file_ops.safe_delete_enable == FALSE)
-		{
-		file_util_delete_full(source_fd, source_list, parent, options->file_ops.confirm_delete ? UtilityPhase::START : UtilityPhase::ENTERING, nullptr, nullptr);
-		}
-	else
-		{
-		file_util_delete_full(source_fd, source_list, parent, options->file_ops.confirm_move_to_trash ? UtilityPhase::START : UtilityPhase::ENTERING, nullptr, nullptr);
-		}
+	const gboolean confirm = safe_delete ? options->file_ops.confirm_move_to_trash : options->file_ops.confirm_delete;
+
+	file_util_delete_full(source_fd, source_list, parent, safe_delete, confirm ? UtilityPhase::START : UtilityPhase::ENTERING, nullptr);
 }
 
-void file_util_delete_notify_done(FileData *source_fd, GList *source_list, GtkWidget *parent, FileUtilDoneFunc done_func, gpointer done_data)
+void file_util_delete_notify_done(FileData *source_fd, GList *source_list, GtkWidget *parent, gboolean safe_delete, const FileUtilDoneFunc &done_func)
 {
-	file_util_delete_full(source_fd, source_list, parent, options->file_ops.confirm_delete ? UtilityPhase::START : UtilityPhase::ENTERING, done_func, done_data);
+	file_util_delete_full(source_fd, source_list, parent, safe_delete, options->file_ops.confirm_delete ? UtilityPhase::START : UtilityPhase::ENTERING, done_func);
 }
 
-void file_util_write_metadata(FileData *source_fd, GList *source_list, GtkWidget *parent, gboolean force_dialog, FileUtilDoneFunc done_func, gpointer done_data)
+void file_util_write_metadata(FileData *source_fd, GList *source_list, GtkWidget *parent, gboolean force_dialog, const FileUtilDoneFunc &done_func)
 {
 	file_util_write_metadata_full(source_fd, source_list, parent,
 	                              ((options->metadata.save_in_image_file && options->metadata.confirm_write) || force_dialog) ? UtilityPhase::START : UtilityPhase::ENTERING,
-	                              done_func, done_data);
+	                              done_func);
 }
 
 void file_util_copy(FileData *source_fd, GList *source_list, const gchar *dest_path, GtkWidget *parent)
@@ -3003,7 +3149,6 @@ void file_util_delete_dir(FileData *fd, GtkWidget *parent)
 struct CreateFolderdData
 {
 	FileUtilDoneFunc done_func;
-	gpointer done_data;
 };
 
 static void create_folder_cb(GtkFileChooser *chooser, gint response_id, gpointer data)
@@ -3020,7 +3165,7 @@ static void create_folder_cb(GtkFileChooser *chooser, gint response_id, gpointer
 #endif
 		if (g_file_test(current_folder, G_FILE_TEST_IS_DIR))
 			{
-			cfd->done_func(TRUE, current_folder, cfd->done_data);
+			cfd->done_func(TRUE, current_folder);
 			}
 		else
 			{
@@ -3042,31 +3187,119 @@ static void create_folder_cb(GtkFileChooser *chooser, gint response_id, gpointer
 	gq_gtk_widget_destroy(GTK_WIDGET(chooser));
 }
 
-void file_util_create_dir(const gchar *path, GtkWidget *parent, FileUtilDoneFunc done_func, gpointer done_data)
+void file_util_create_dir(const gchar *path, GtkWidget *parent, const FileUtilDoneFunc &done_func)
 {
 	if (!GTK_IS_WINDOW(parent))
 		{
-		parent = gtk_widget_get_toplevel(parent);
+		parent = widget_get_toplevel(parent);
 		}
 
 	auto cfd = g_new0(CreateFolderdData, 1);
 	cfd->done_func = done_func;
-	cfd->done_data = done_data;
 
-	GtkWidget *dialog = gtk_file_chooser_dialog_new(_("Create Folder"), GTK_WINDOW(parent), GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, _("Cancel"), GTK_RESPONSE_CANCEL, _("Close"), GTK_RESPONSE_ACCEPT, nullptr);
+	FileChooserDialogData fcdd{};
 
-	gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
-	gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), path);
+	/* The select-folder interface is simpler for creating a new
+	 * folder than the create-folder interface
+	 */
+	fcdd.action = GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
+	fcdd.accept_text = _("Close");
+	fcdd.data = cfd;
+	fcdd.filename = path;
+	fcdd.response_callback = G_CALLBACK(create_folder_cb);
+	fcdd.title = _("Geeqie - Create Folder");
 
-	g_signal_connect(dialog, "response", G_CALLBACK(create_folder_cb), cfd);
+	GtkFileChooserDialog *dialog = file_chooser_dialog_new(fcdd);
 
 	gq_gtk_widget_show_all(GTK_WIDGET(dialog));
 }
 
-void file_util_rename_dir(FileData *source_fd, const gchar *new_path, GtkWidget *parent, FileUtilDoneFunc done_func, gpointer done_data)
+void file_util_rename_dir(FileData *source_fd, const gchar *new_path, GtkWidget *parent, const FileUtilDoneFunc &done_func)
 {
-	file_util_rename_dir_full(source_fd, new_path, parent, UtilityPhase::ENTERING, done_func, done_data);
+	file_util_rename_dir_full(source_fd, new_path, parent, UtilityPhase::ENTERING, done_func);
 }
+
+#if HAVE_GTK4
+static GdkContentProvider * clipboard_build_provider(ClipboardData *cbd)
+{
+	g_autoptr(GdkContentProvider) provider = gdk_content_provider_new_union(NULL, 0);
+
+	GList *work = cbd->path_list;
+
+	/* Plain text version */
+	g_autoptr(GString) text = g_string_new("");
+
+	while (work)
+		{
+		const gchar *path = (const gchar *)work->data;
+		work = work->next;
+
+		if (cbd->quoted)
+			{
+			g_autofree gchar *q = g_shell_quote(path);
+			g_string_append(text, q);
+			}
+		else
+			{
+			g_string_append(text, path);
+			}
+
+		if (work)
+			{
+			g_string_append_c(text, ' ');
+			}
+		}
+
+	gdk_content_provider_union_add( provider, gdk_content_provider_new_typed(G_TYPE_STRING, g_strdup(text->str)));
+
+	/* GNOME copied-files format */
+	g_autoptr(GString) copied = g_string_new(cbd->action == ClipboardAction::CUT ? "cut" : "copy");
+
+	work = cbd->path_list;
+	while (work)
+		{
+		g_autofree gchar *uri =
+			g_filename_to_uri((gchar *)work->data, NULL, NULL);
+		g_string_append(copied, "\n");
+		g_string_append(copied, uri);
+		work = work->next;
+		}
+
+	gdk_content_provider_union_add(provider, gdk_content_provider_new_for_bytes("application/x-special-gnome-copied-files", g_bytes_new(copied->str, copied->len)));
+
+	return g_steal_pointer(&provider);
+}
+
+static gboolean path_list_to_clipboard(GList *path_list, gboolean quoted, ClipboardAction action, GdkAtom)
+{
+	ClipboardData cbd = {};
+	cbd.path_list = path_list;
+	cbd.quoted = quoted;
+	cbd.action = action;
+
+	GdkDisplay *display = gdk_display_get_default();
+	if (!display)
+		{
+		return FALSE;
+		}
+
+	GdkClipboard *clipboard = gdk_display_get_clipboard(display);
+	if (!clipboard)
+		{
+		return FALSE;
+		}
+
+	GdkContentProvider *provider = clipboard_build_provider(&cbd);
+
+	gdk_clipboard_set_content(clipboard, provider);
+	g_object_unref(provider);
+
+	GdkClipboard *primary = gdk_display_get_primary_clipboard(display);
+	gdk_clipboard_set_content(primary, provider);
+
+	return TRUE;
+}
+#else
 
 /**
  * @brief
@@ -3077,12 +3310,6 @@ void file_util_rename_dir(FileData *source_fd, const gchar *new_path, GtkWidget 
  *
  *
  */
-#if HAVE_GTK4
-static void clipboard_get_func(GtkClipboard *clipboard, GtkSelectionData *selection_data, guint info, gpointer data)
-{
-/* @FIXME GTK4 stub */
-}
-#else
 static void clipboard_get_func(GtkClipboard *clipboard, GtkSelectionData *selection_data, guint info, gpointer data)
 {
 	auto cbd = static_cast<ClipboardData *>(data);
@@ -3140,7 +3367,6 @@ static void clipboard_get_func(GtkClipboard *clipboard, GtkSelectionData *select
 
 	gtk_selection_data_set(selection_data, gtk_selection_data_get_target(selection_data), 8, reinterpret_cast<guchar *>(path_list_str->str), path_list_str->len);
 }
-#endif
 
 /**
  * @brief
@@ -3166,6 +3392,7 @@ static gboolean path_list_to_clipboard(GList *path_list, gboolean quoted, Clipbo
 
 	return gtk_clipboard_set_with_data(gtk_clipboard_get(selection), target_types.data(), target_types.size(), clipboard_get_func, clipboard_clear_func, cbd);
 }
+#endif
 
 /**
  * @brief

@@ -22,6 +22,8 @@
 
 #include <config.h>
 
+#include "compat-deprecated.h"
+
 #if HAVE_GTK4
 void gq_gtk_container_add(GtkWidget *container, GtkWidget *widget)
 {
@@ -70,10 +72,106 @@ void gq_gtk_container_add(GtkWidget *container, GtkWidget *widget)
 		g_abort();
 		}
 }
+
+GtkWidget *gq_gtk_image_new_from_stock(const gchar *stock_id, GtkIconSize size)
+{
+	return nullptr;
+}
+
+GtkWidget *gq_gtk_bin_get_child(GtkWidget *widget)
+{
+	return gtk_widget_get_first_child(widget);
+}
+
+GList *gq_gtk_widget_get_children(GtkWidget *widget)
+{
+	GList *list = NULL;
+
+	for (GtkWidget *child = gtk_widget_get_first_child(widget);
+		child;
+		child = gtk_widget_get_next_sibling(child))
+		{
+		list = g_list_prepend(list, child);
+		}
+
+	return g_list_reverse(list);
+}
+
+void gq_gtk_viewport_set_shadow_type(GtkWidget *, int)
+{
+}
+
+void gq_drag_g_signal_connect(GObject *instance, const gchar *detailed_signal, GCallback c_handler, gpointer data)
+{
+}
+
+void gq_drag_g_signal_swapped(GObject *instance, const gchar *detailed_signal, GCallback c_handler, gpointer data)
+{
+}
+
+void gq_gtk_drag_source_set(GtkWidget *widget, GdkModifierType start_button_mask, gpointer, gint n_targets, GdkDragAction actions)
+{
+}
+
+void gq_gtk_drag_dest_set(GtkWidget *widget, gpointer, gpointer, gint n_targets, GdkDragAction actions)
+{
+}
+
+void gq_gtk_drag_dest_unset(GtkWidget *widget)
+{
+}
+
 #else
 void gq_gtk_container_add(GtkWidget *container, GtkWidget *widget)
 {
 	gtk_container_add(GTK_CONTAINER(container), widget);
 }
+
+GtkWidget *gq_gtk_image_new_from_stock(const gchar *stock_id, GtkIconSize size)
+{
+	return deprecated_gtk_image_new_from_stock(stock_id, size);
+}
+
+GtkWidget *gq_gtk_bin_get_child(GtkWidget *widget)
+{
+	return gtk_bin_get_child(GTK_BIN(widget));
+}
+
+GList *gq_gtk_widget_get_children(GtkWidget *widget)
+{
+	return gtk_container_get_children(GTK_CONTAINER(widget));
+}
+
+void gq_gtk_viewport_set_shadow_type(GtkWidget *viewport, int type)
+{
+	gtk_viewport_set_shadow_type(GTK_VIEWPORT(viewport), static_cast<GtkShadowType>(type));
+}
+
+void gq_drag_g_signal_connect(GObject *instance, const gchar *detailed_signal, GCallback c_handler, gpointer data)
+{
+	g_signal_connect(instance, detailed_signal, c_handler, data);
+}
+
+void gq_drag_g_signal_swapped(GObject *instance, const gchar *detailed_signal, GCallback c_handler, gpointer data)
+{
+	g_signal_connect(instance, detailed_signal, c_handler, data);
+}
+
+void gq_gtk_drag_source_set(GtkWidget *widget, GdkModifierType start_button_mask, const GtkTargetEntry *targets, gint n_targets, GdkDragAction actions)
+{
+	gtk_drag_source_set(widget, start_button_mask, targets, n_targets, actions);
+}
+
+void gq_gtk_drag_dest_set(GtkWidget *widget, GtkDestDefaults flags, const GtkTargetEntry *targets, gint n_targets, GdkDragAction actions)
+{
+	gtk_drag_dest_set(widget, flags, targets, n_targets, actions);
+}
+
+void gq_gtk_drag_dest_unset(GtkWidget *widget)
+{
+	gtk_drag_dest_unset(widget);
+}
+
 #endif
+
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

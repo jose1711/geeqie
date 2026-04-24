@@ -35,7 +35,7 @@ struct ImageLoaderWEBP : public ImageLoaderBackend
 public:
 	~ImageLoaderWEBP() override;
 
-	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data) override;
+	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data) override;
 	gboolean write(const guchar *buf, gsize &chunk_size, gsize count, GError **error) override;
 	GdkPixbuf *get_pixbuf() override;
 	gchar *get_format_name() override;
@@ -47,11 +47,6 @@ private:
 
 	GdkPixbuf *pixbuf;
 };
-
-void free_buffer(guchar *pixels, gpointer)
-{
-	g_free(pixels);
-}
 
 gboolean ImageLoaderWEBP::write(const guchar *buf, gsize &chunk_size, gsize count, GError **)
 {
@@ -87,7 +82,7 @@ gboolean ImageLoaderWEBP::write(const guchar *buf, gsize &chunk_size, gsize coun
 
 	if (pixels)
 		{
-		pixbuf = gdk_pixbuf_new_from_data(pixels, GDK_COLORSPACE_RGB, features.has_alpha, 8, width, height, width * (features.has_alpha ? 4 : 3), free_buffer, nullptr);
+		pixbuf = gdk_pixbuf_new_from_data(pixels, GDK_COLORSPACE_RGB, features.has_alpha, 8, width, height, width * (features.has_alpha ? 4 : 3), free_pixels, nullptr);
 
 		area_updated_cb(nullptr, 0, 0, width, height, data);
 
@@ -99,7 +94,7 @@ gboolean ImageLoaderWEBP::write(const guchar *buf, gsize &chunk_size, gsize coun
 	return FALSE;
 }
 
-void ImageLoaderWEBP::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, AreaPreparedCb, gpointer data)
+void ImageLoaderWEBP::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, gpointer data)
 {
 	this->area_updated_cb = area_updated_cb;
 	this->data = data;

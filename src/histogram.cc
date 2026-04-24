@@ -27,6 +27,7 @@
 #include <glib-object.h>
 
 #include "filedata.h"
+#include "geometry.h"
 #include "intl.h"
 #include "pixbuf-util.h"
 
@@ -51,8 +52,7 @@ void histogram_vgrid(const Histogram::Grid &grid, GdkPixbuf *pixbuf, GdkRectangl
 		{
 		gint xpos = rect.x + static_cast<int>((i * add) + 0.5);
 
-		pixbuf_draw_line(pixbuf, rect, xpos, rect.y, xpos, rect.y + rect.height,
-		                 grid.color.R, grid.color.G, grid.color.B, grid.color.A);
+		pixbuf_draw_line(pixbuf, rect, {xpos, rect.y}, {xpos, rect.y + rect.height}, grid.color);
 		}
 }
 
@@ -66,8 +66,7 @@ void histogram_hgrid(const Histogram::Grid &grid, GdkPixbuf *pixbuf, GdkRectangl
 		{
 		gint ypos = rect.y + static_cast<int>((i * add) + 0.5);
 
-		pixbuf_draw_line(pixbuf, rect, rect.x, ypos, rect.x + rect.width, ypos,
-		                 grid.color.R, grid.color.G, grid.color.B, grid.color.A);
+		pixbuf_draw_line(pixbuf, rect, {rect.x, ypos}, {rect.x + rect.width, ypos}, grid.color);
 		}
 }
 
@@ -236,10 +235,9 @@ gboolean histmap_start_idle(FileData *fd)
 	if (fd->histmap || !fd->pixbuf) return FALSE;
 
 	fd->histmap = histmap_new();
-	fd->histmap->pixbuf = fd->pixbuf;
-	g_object_ref(fd->histmap->pixbuf);
-
+	fd->histmap->pixbuf = g_object_ref(fd->pixbuf);
 	fd->histmap->idle_id = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, histmap_idle_cb, fd, nullptr);
+
 	return TRUE;
 }
 
@@ -253,7 +251,7 @@ void Histogram::draw(const HistMap *histmap, GdkPixbuf *pixbuf, gint x, gint y, 
 	gulong max = 0;
 	gdouble logmax;
 	gint combine = ((HISTMAP_SIZE - 1) / width) + 1;
-	gint ypos = y + height;
+	GqPoint c1{ x, y + height };
 
 	/* Draw the grid */
 	constexpr Histogram::Grid grid{5, 3, {160, 160, 160, 250}};
@@ -272,15 +270,12 @@ void Histogram::draw(const HistMap *histmap, GdkPixbuf *pixbuf, gint x, gint y, 
 	else
 		logmax = 1.0;
 
-	for (i = 0; i < width; i++)
+	for (i = 0; i < width; i++, c1.x++)
 		{
 		gint j;
 		glong v[4] = {0, 0, 0, 0};
-		gint rplus = 0;
-		gint gplus = 0;
-		gint bplus = 0;
+		GqColor plus{ 0, 0, 0, 255 };
 		gint ii = i * HISTMAP_SIZE / width;
-		gint xpos = x + i;
 		gint num_chan;
 
 		for (j = 0; j < combine; j++)
@@ -310,48 +305,42 @@ void Histogram::draw(const HistMap *histmap, GdkPixbuf *pixbuf, gint x, gint y, 
 				chanmax = histogram_channel;
 				}
 
-			    	{
-				gulong pt;
-				gint r = rplus;
-				gint g = gplus;
-				gint b = bplus;
-
-				switch (chanmax)
-					{
-					case HCHAN_R: rplus = r = 255; break;
-					case HCHAN_G: gplus = g = 255; break;
-					case HCHAN_B: bplus = b = 255; break;
-					default:
-						break;
-					}
-
-				switch (histogram_channel)
-					{
-					case HCHAN_RGB:
-						if (r == 255 && g == 255 && b == 255)
-							{
-							r = 0; 	b = 0; 	g = 0;
-							}
-						break;
-					case HCHAN_R:	  	b = 0; 	g = 0; 	break;
-					case HCHAN_G:   r = 0; 	b = 0;		break;
-					case HCHAN_B:   r = 0;		g = 0; 	break;
-					case HCHAN_MAX: r = 0; 	b = 0; 	g = 0; 	break;
-					default:
-						break;
-					}
-
-				if (v[chanmax] == 0)
-					pt = 0;
-				else if (histogram_mode == HMODE_LOG)
-					pt = (static_cast<gdouble>(log(v[chanmax]))) / logmax * (height - 1);
-				else
-					pt = (static_cast<gdouble>(v[chanmax])) / max * (height - 1);
-
-				pixbuf_draw_line(pixbuf, rect,
-				                 xpos, ypos, xpos, ypos - pt,
-				                 r, g, b, 255);
+			switch (chanmax)
+				{
+				case HCHAN_R: plus.r = 255; break;
+				case HCHAN_G: plus.g = 255; break;
+				case HCHAN_B: plus.b = 255; break;
+				default: break;
 				}
+
+			GqColor c = plus;
+
+			switch (histogram_channel)
+				{
+				case HCHAN_RGB:
+					if (c.r == 255 && c.g == 255 && c.b == 255)
+						{
+						c = { 0, 0, 0, 255 };
+						}
+					break;
+				case HCHAN_R:   c = { c.r, 0,   0, 255 }; break;
+				case HCHAN_G:   c = { 0,   0, c.g, 255 }; break;
+				case HCHAN_B:   c = { 0, c.b,   0, 255 }; break;
+				case HCHAN_MAX: c = { 0,   0,   0, 255 }; break;
+				default: break;
+				}
+
+			GqPoint c2 = c1;
+
+			if (v[chanmax] != 0)
+				{
+				if (histogram_mode == HMODE_LOG)
+					c2.y -= (static_cast<gdouble>(log(v[chanmax]))) / logmax * (height - 1);
+				else
+					c2.y -= (static_cast<gdouble>(v[chanmax])) / max * (height - 1);
+				}
+
+			pixbuf_draw_line(pixbuf, rect, c1, c2, c);
 
 			v[chanmax] = -1;
 			}

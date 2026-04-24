@@ -21,24 +21,14 @@
 
 #include "dnd.h"
 
+#include <algorithm>
+
 #include <glib-object.h>
 #include <pango/pango.h>
 
 #include "compat.h"
 #include "options.h"
 #include "pixbuf-util.h"
-
-
-constexpr std::array<GtkTargetEntry, 2> dnd_file_drag_types{{
-	{ const_cast<gchar *>("text/uri-list"), 0, TARGET_URI_LIST },
-	{ const_cast<gchar *>("text/plain"), 0, TARGET_TEXT_PLAIN }
-}};
-
-constexpr std::array<GtkTargetEntry, 3> dnd_file_drop_types{{
-	{ const_cast<gchar *>(TARGET_APP_COLLECTION_MEMBER_STRING), 0, TARGET_APP_COLLECTION_MEMBER },
-	{ const_cast<gchar *>("text/uri-list"), 0, TARGET_URI_LIST },
-	{ const_cast<gchar *>("text/plain"), 0, TARGET_TEXT_PLAIN },
-}};
 
 
 #define DND_ICON_SIZE (options->dnd_icon_size)
@@ -136,16 +126,16 @@ void dnd_set_drag_icon(GtkWidget *widget, GdkDragContext *context, GdkPixbuf *pi
 
 		x = std::max(0, w - lw);
 		y = std::max(0, h - lh);
-		lw = CLAMP(lw, 0, w - x - 1);
-		lh = CLAMP(lh, 0, h - y - 1);
+		lw = std::clamp(lw, 0, w - x - 1);
+		lh = std::clamp(lh, 0, h - y - 1);
 
-		pixbuf_draw_rect_fill(dest, {x, y, lw, lh}, 128, 128, 128, 255);
+		pixbuf_draw_rect_fill(dest, {x, y, lw, lh}, {128, 128, 128, 255});
 		}
 
 	if (layout)
 		{
-		pixbuf_draw_layout(dest, layout, x + 1, y + 1, 0, 0, 0, 255);
-		pixbuf_draw_layout(dest, layout, x, y, 255, 255, 255, 255);
+		pixbuf_draw_layout(dest, layout, x + 1, y + 1, {0, 0, 0, 255});
+		pixbuf_draw_layout(dest, layout, x, y, {255, 255, 255, 255});
 
 		g_object_unref(G_OBJECT(layout));
 		}
@@ -162,14 +152,13 @@ static void dnd_set_drag_label_end_cb(GtkWidget *widget, GdkDragContext *, gpoin
 
 void dnd_set_drag_label(GtkWidget *widget, GdkDragContext *context, const gchar *text)
 {
-	GtkWidget *window;
 	GtkWidget *label;
 
-	window = gtk_window_new(GTK_WINDOW_POPUP);
+	GtkWidget *window = gtk_window_new(GTK_WINDOW_POPUP);
 	gtk_widget_realize (window);
 
 	label = gtk_label_new(text);
-	gq_gtk_container_add(GTK_WIDGET (window), label);
+	gq_gtk_container_add(window, label);
 	gtk_widget_show(label);
 	gtk_drag_set_icon_widget(context, window, -15, 10);
 	g_signal_connect(G_OBJECT(widget), "drag_end",

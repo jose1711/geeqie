@@ -22,6 +22,8 @@
 #ifndef DND_H
 #define DND_H
 
+#if !HAVE_GTK4
+
 #include <array>
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -43,13 +45,21 @@ enum {
 	TARGET_TEXT_PLAIN
 };
 
+inline constexpr std::array<GtkTargetEntry, 2> dnd_file_drag_types{{
+	{ const_cast<gchar *>("text/uri-list"), 0, TARGET_URI_LIST },
+	{ const_cast<gchar *>("text/plain"), 0, TARGET_TEXT_PLAIN }
+}};
 
-extern const std::array<GtkTargetEntry, 2> dnd_file_drag_types;
-extern const std::array<GtkTargetEntry, 3> dnd_file_drop_types;
+inline constexpr std::array<GtkTargetEntry, 3> dnd_file_drop_types{{
+	{ const_cast<gchar *>(TARGET_APP_COLLECTION_MEMBER_STRING), 0, TARGET_APP_COLLECTION_MEMBER },
+	{ const_cast<gchar *>("text/uri-list"), 0, TARGET_URI_LIST },
+	{ const_cast<gchar *>("text/plain"), 0, TARGET_TEXT_PLAIN },
+}};
 
 void dnd_set_drag_icon(GtkWidget *widget, GdkDragContext *context, GdkPixbuf *pixbuf, gint items);
 
 void dnd_set_drag_label(GtkWidget *widget, GdkDragContext *context, const gchar *text);
 
+#endif
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

@@ -22,18 +22,31 @@
 #ifndef IMAGE_H
 #define IMAGE_H
 
+#include <functional>
+#include <optional>
+
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gdk/gdk.h>
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "color-man.h"
-#include "typedefs.h"
+enum StereoPixbufData : gint;
 
 struct CollectInfo;
 struct CollectionData;
+struct ColorMan;
+struct ColorManStatus;
 class FileData;
 struct ImageLoader;
+
+enum AlterType : gint {
+	ALTER_NONE,		/**< do nothing */
+	ALTER_ROTATE_90,
+	ALTER_ROTATE_90_CC,	/**< counterclockwise */
+	ALTER_ROTATE_180,
+	ALTER_MIRROR,
+	ALTER_FLIP,
+};
 
 enum ImageState {
 	IMAGE_STATE_NONE	= 0,
@@ -75,16 +88,9 @@ struct ImageWindow
 	void (*func_complete)(ImageWindow *imd, gint preload, gpointer data);
 	void (*func_state)(ImageWindow *imd, ImageState state, gpointer data);
 
-	using TileRequestFunc = gint (*)(ImageWindow *, gint, gint, gint, gint, GdkPixbuf *, gpointer);
-	TileRequestFunc func_tile_request;
-
-	using TileDisposeFunc = void (*)(ImageWindow *, gint, gint, gint, gint, GdkPixbuf *, gpointer);
-	TileDisposeFunc func_tile_dispose;
-
 	gpointer data_update;
 	gpointer data_complete;
 	gpointer data_state;
-	gpointer data_tile;
 
 	/* button, scroll functions */
 	void (*func_button)(ImageWindow *, GdkEventButton *event, gpointer);
@@ -98,12 +104,11 @@ struct ImageWindow
 	gpointer data_focus_in;
 
 	/**
-	 * @headerfile func_scroll_notify
+	 * @headerfile scroll_notify_func
 	 * scroll notification (for scroll bar implementation)
 	 */
-	void (*func_scroll_notify)(ImageWindow *, gint x, gint y, gint width, gint height, gpointer);
-
-	gpointer data_scroll_notify;
+	using ScrollNotifyFunc = std::function<void(ImageWindow *, gint x, gint y, gint width, gint height)>;
+	ScrollNotifyFunc scroll_notify_func;
 
 	/* collection info */
 	CollectionData *collection;
@@ -113,10 +118,7 @@ struct ImageWindow
 	gboolean color_profile_enable;
 	gint color_profile_input;
 	gboolean color_profile_use_image;
-	ColorManProfileType color_profile_from_image;
-	gpointer cm;
-
-	AlterType delay_alter_type;
+	ColorMan *cm;
 
 	FileData *read_ahead_fd;
 	ImageLoader *read_ahead_il;
@@ -129,7 +131,7 @@ struct ImageWindow
 	gint orientation;
 	gboolean desaturate;
 	gboolean overunderexposed;
-	gint user_stereo;
+	StereoPixbufData user_stereo;
 
 	gboolean mouse_wheel_mode;
 };
@@ -181,16 +183,17 @@ CollectionData *image_get_collection(ImageWindow *imd, CollectInfo **info);
 void image_copy_from_image(ImageWindow *imd, ImageWindow *source);
 void image_move_from_image(ImageWindow *imd, ImageWindow *source);
 
-gboolean image_get_image_size(ImageWindow *imd, gint *width, gint *height);
+gboolean image_get_image_size(ImageWindow *imd, gint &width, gint &height);
 GdkPixbuf *image_get_pixbuf(ImageWindow *imd);
 
 /* manipulation */
 void image_area_changed(ImageWindow *imd, gint x, gint y, gint width, gint height);
 void image_reload(ImageWindow *imd);
+void image_mousewheel_scroll(ImageWindow *imd, GdkScrollDirection direction);
 void image_scroll(ImageWindow *imd, gint x, gint y);
 void image_scroll_to_point(ImageWindow *imd, gint x, gint y,
 			   gdouble x_align, gdouble y_align);
-void image_get_scroll_center(ImageWindow *imd, gdouble *x, gdouble *y);
+void image_get_scroll_center(ImageWindow *imd, gdouble &x, gdouble &y);
 void image_set_scroll_center(ImageWindow *imd, gdouble x, gdouble y);
 void image_alter_orientation(ImageWindow *imd, FileData *fd, AlterType type);
 void image_set_desaturate(ImageWindow *imd, gboolean desaturate);
@@ -212,7 +215,7 @@ gdouble image_zoom_get_default(ImageWindow *imd);
 /* stereo */
 void image_stereo_set(ImageWindow *imd, gint stereo_mode);
 
-StereoPixbufData image_stereo_pixbuf_get(ImageWindow *imd);
+StereoPixbufData image_stereo_pixbuf_get(const ImageWindow *imd);
 void image_stereo_pixbuf_set(ImageWindow *imd, StereoPixbufData stereo_mode);
 
 void image_prebuffer_set(ImageWindow *imd, FileData *fd);
@@ -222,7 +225,7 @@ void image_auto_refresh_enable(ImageWindow *imd, gboolean enable);
 void image_top_window_set_sync(ImageWindow *imd, gboolean allow_sync);
 
 /* background of image */
-void image_background_set_color(ImageWindow *imd, GdkRGBA *color);
+void image_background_set_color(ImageWindow *imd, const GdkRGBA &color);
 void image_background_set_color_from_options(ImageWindow *imd, gboolean fullscreen);
 
 /* color profiles */
@@ -230,24 +233,16 @@ void image_color_profile_set(ImageWindow *imd, gint input_type, gboolean use_ima
 gboolean image_color_profile_get(const ImageWindow *imd, gint &input_type, gboolean &use_image);
 void image_color_profile_set_use(ImageWindow *imd, gboolean enable);
 gboolean image_color_profile_get_use(ImageWindow *imd);
-gboolean image_color_profile_get_status(ImageWindow *imd, gchar **image_profile, gchar **screen_profile);
+std::optional<ColorManStatus> image_color_profile_get_status(const ImageWindow *imd);
 
 void image_set_delay_flip(ImageWindow *imd, gint delay);
 
 void image_to_root_window(ImageWindow *imd, gboolean scaled);
 
 
-
-void image_set_image_as_tiles(ImageWindow *imd, gint width, gint height,
-			      gint tile_width, gint tile_height, gint cache_size,
-			      ImageWindow::TileRequestFunc func_tile_request,
-			      ImageWindow::TileDisposeFunc func_tile_dispose,
-			      gpointer data,
-			      gdouble zoom);
-
 void image_options_sync();
 
-void image_get_rectangle(gint &x1, gint &y1, gint &x2, gint &y2);
+std::tuple<int, int, int, int> image_get_rectangle();
 void image_update_title(ImageWindow *imd);
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

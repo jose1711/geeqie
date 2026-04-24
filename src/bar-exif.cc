@@ -41,7 +41,6 @@
 #include "metadata.h"
 #include "misc.h"
 #include "rcfile.h"
-#include "typedefs.h"
 #include "ui-menu.h"
 #include "ui-misc.h"
 #include "ui-utildlg.h"
@@ -132,11 +131,11 @@ void bar_pane_exif_setup_entry_box(PaneExifData *ped, ExifEntry *ee)
 
 	if (ee->box)
 		{
-		gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(ee->box)), ee->box);
+		widget_remove_from_parent(ee->box);
 		}
 
 	ee->box = gtk_box_new(horizontal ? GTK_ORIENTATION_HORIZONTAL : GTK_ORIENTATION_VERTICAL, 0);
-	gq_gtk_container_add(GTK_WIDGET(ee->ebox), ee->box);
+	gq_gtk_container_add(ee->ebox, ee->box);
 	gtk_widget_show(ee->box);
 
 	ee->title_label = gtk_label_new(nullptr);
@@ -305,7 +304,7 @@ gint bar_pane_exif_event(GtkWidget *bar, GdkEvent *event)
 	auto *ped = static_cast<PaneExifData *>(g_object_get_data(G_OBJECT(bar), "pane_data"));
 	if (!ped) return FALSE;
 
-	g_autoptr(GList) list = gtk_container_get_children(GTK_CONTAINER(ped->vbox));
+	g_autoptr(GList) list = gq_gtk_widget_get_children(GTK_WIDGET(ped->vbox));
 	gboolean ret = FALSE;
 	for (GList *work = list; !ret && work; work = work->next)
 		{
@@ -345,7 +344,7 @@ constexpr std::array<GtkTargetEntry, 2> bar_pane_exif_drop_types{{
 	{ const_cast<gchar *>("text/plain"), 0, TARGET_TEXT_PLAIN }
 }};
 
-
+#if !HAVE_GTK4
 void bar_pane_exif_entry_dnd_get(GtkWidget *entry, GdkDragContext *,
 				     GtkSelectionData *selection_data, guint info,
 				     guint, gpointer)
@@ -391,7 +390,7 @@ void bar_pane_exif_dnd_receive(GtkWidget *pane, GdkDragContext *,
 			break;
 		}
 
-	g_autoptr(GList) list = gtk_container_get_children(GTK_CONTAINER(ped->vbox));
+	g_autoptr(GList) list = gq_gtk_widget_get_children(GTK_WIDGET(ped->vbox));
 	gint pos = 0;
 	for (GList *work = list; work; work = work->next)
 		{
@@ -432,27 +431,28 @@ void bar_pane_exif_entry_dnd_init(GtkWidget *entry)
 {
 	auto ee = static_cast<ExifEntry *>(g_object_get_data(G_OBJECT(entry), "entry_data"));
 
-	gtk_drag_source_set(entry, static_cast<GdkModifierType>(GDK_BUTTON1_MASK | GDK_BUTTON2_MASK),
+	gq_gtk_drag_source_set(entry, static_cast<GdkModifierType>(GDK_BUTTON1_MASK | GDK_BUTTON2_MASK),
 	                    bar_pane_exif_drag_types.data(), bar_pane_exif_drag_types.size(),
 	                    static_cast<GdkDragAction>(GDK_ACTION_COPY | GDK_ACTION_MOVE | GDK_ACTION_LINK));
-	g_signal_connect(G_OBJECT(entry), "drag_data_get",
+	gq_drag_g_signal_connect(G_OBJECT(entry), "drag_data_get",
 			 G_CALLBACK(bar_pane_exif_entry_dnd_get), ee);
 
-	g_signal_connect(G_OBJECT(entry), "drag_begin",
+	gq_drag_g_signal_connect(G_OBJECT(entry), "drag_begin",
 			 G_CALLBACK(bar_pane_exif_entry_dnd_begin), ee);
-	g_signal_connect(G_OBJECT(entry), "drag_end",
+	gq_drag_g_signal_connect(G_OBJECT(entry), "drag_end",
 			 G_CALLBACK(bar_pane_exif_entry_dnd_end), ee);
 }
 
 void bar_pane_exif_dnd_init(GtkWidget *pane)
 {
-	gtk_drag_dest_set(pane,
+	gq_gtk_drag_dest_set(pane,
 	                  static_cast<GtkDestDefaults>(GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_HIGHLIGHT | GTK_DEST_DEFAULT_DROP),
 	                  bar_pane_exif_drop_types.data(), bar_pane_exif_drop_types.size(),
 	                  static_cast<GdkDragAction>(GDK_ACTION_COPY | GDK_ACTION_MOVE));
-	g_signal_connect(G_OBJECT(pane), "drag_data_received",
-			 G_CALLBACK(bar_pane_exif_dnd_receive), NULL);
+	gq_drag_g_signal_connect(G_OBJECT(pane), "drag_data_received",
+			 G_CALLBACK(bar_pane_exif_dnd_receive), nullptr);
 }
+#endif
 
 void bar_pane_exif_edit_close_cb(GtkWidget *, gpointer data)
 {
@@ -465,10 +465,6 @@ void bar_pane_exif_edit_destroy_cb(GtkWidget *, gpointer data)
 	auto cdd = static_cast<ConfDialogData *>(data);
 	g_signal_handlers_disconnect_by_func(cdd->widget, (gpointer)(bar_pane_exif_edit_close_cb), cdd->gd);
 	g_free(cdd);
-}
-
-void bar_pane_exif_edit_cancel_cb(GenericDialog *, gpointer)
-{
 }
 
 void bar_pane_exif_edit_ok_cb(GenericDialog *, gpointer data)
@@ -546,8 +542,8 @@ void bar_pane_exif_conf_dialog(GtkWidget *widget)
 	cdd->editable = ee ? ee->editable : FALSE;
 
 	cdd->gd = gd = generic_dialog_new(ee ? _("Configure entry") : _("Add entry"), "exif_entry_edit",
-				widget, TRUE,
-				bar_pane_exif_edit_cancel_cb, cdd);
+	                                  widget, TRUE,
+	                                  generic_dialog_dummy_cb, cdd);
 	g_signal_connect(G_OBJECT(gd->dialog), "destroy",
 			 G_CALLBACK(bar_pane_exif_edit_destroy_cb), cdd);
 
@@ -591,31 +587,27 @@ void bar_pane_exif_conf_dialog_cb(GtkWidget *, gpointer data)
 	bar_pane_exif_conf_dialog(widget);
 }
 
-void bar_pane_exif_delete_entry_cb(GtkWidget *, gpointer data)
-{
-	auto entry = static_cast<GtkWidget *>(data);
-	gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(entry)), entry);
-}
-
-#if HAVE_GTK4
-void bar_pane_exif_copy_entry_cb(GtkWidget *, gpointer data)
-{
-/* @FIXME GTK4 stub */
-}
-#else
 void bar_pane_exif_copy_entry_cb(GtkWidget *, gpointer data)
 {
 	auto widget = static_cast<GtkWidget *>(data);
-	GtkClipboard *clipboard;
 	const gchar *value;
 	ExifEntry *ee;
 
 	ee = static_cast<ExifEntry *>(g_object_get_data(G_OBJECT(widget), "entry_data"));
 	value = gtk_label_get_text(GTK_LABEL(ee->value_widget));
+
+#if HAVE_GTK4
+	GdkDisplay *display = gdk_display_get_default();
+	GdkClipboard *clipboard = gdk_display_get_clipboard(display);
+
+	gdk_clipboard_set_text(clipboard, value);
+#else
+	GtkClipboard *clipboard;
+
 	clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
 	gtk_clipboard_set_text(clipboard, value, -1);
-}
 #endif
+}
 
 void bar_pane_exif_toggle_show_all_cb(GtkWidget *, gpointer data)
 {
@@ -641,7 +633,7 @@ void bar_pane_exif_menu_popup(GtkWidget *widget, PaneExifData *ped)
 		g_autofree gchar *copy = g_strdup_printf(_("Copy \"%s\""), ee->title);
 
 		menu_item_add_icon(menu, conf, GQ_ICON_EDIT, G_CALLBACK(bar_pane_exif_conf_dialog_cb), widget);
-		menu_item_add_icon(menu, del, GQ_ICON_DELETE, G_CALLBACK(bar_pane_exif_delete_entry_cb), widget);
+		menu_item_add_icon(menu, del, GQ_ICON_DELETE, G_CALLBACK(widget_remove_from_parent_cb), widget);
 		menu_item_add_icon(menu, copy, GQ_ICON_COPY, G_CALLBACK(bar_pane_exif_copy_entry_cb), widget);
 		menu_item_add_divider(menu);
 		}
@@ -656,7 +648,7 @@ void bar_pane_exif_menu_popup(GtkWidget *widget, PaneExifData *ped)
 gboolean bar_pane_exif_menu_cb(GtkWidget *widget, GdkEventButton *bevent, gpointer data)
 {
 	auto ped = static_cast<PaneExifData *>(data);
-	if (bevent->button == MOUSE_BUTTON_RIGHT)
+	if (bevent->button == GDK_BUTTON_SECONDARY)
 		{
 		bar_pane_exif_menu_popup(widget, ped);
 		return TRUE;
@@ -664,32 +656,33 @@ gboolean bar_pane_exif_menu_cb(GtkWidget *widget, GdkEventButton *bevent, gpoint
 	return FALSE;
 }
 
-#if HAVE_GTK4
-gboolean bar_pane_exif_copy_cb(GtkWidget *widget, GdkEventButton *bevent, gpointer)
-{
-/* @FIXME GTK4 stub */
-	return FALSE;
-}
-#else
 gboolean bar_pane_exif_copy_cb(GtkWidget *widget, GdkEventButton *bevent, gpointer)
 {
 	const gchar *value;
-	GtkClipboard *clipboard;
 	ExifEntry *ee;
 
-	if (bevent->button == MOUSE_BUTTON_LEFT)
+	if (bevent->button == GDK_BUTTON_PRIMARY)
 		{
 		ee = static_cast<ExifEntry *>(g_object_get_data(G_OBJECT(widget), "entry_data"));
 		value = gtk_label_get_text(GTK_LABEL(ee->value_widget));
+
+#if HAVE_GTK4
+		GdkDisplay *display = gdk_display_get_default();
+		GdkClipboard *clipboard = gdk_display_get_primary_clipboard(display);
+
+		gdk_clipboard_set_text(clipboard, value);
+#else
+		GtkClipboard *clipboard;
+
 		clipboard = gtk_clipboard_get(GDK_SELECTION_PRIMARY);
 		gtk_clipboard_set_text(clipboard, value, -1);
+#endif
 
 		return TRUE;
 		}
 
 	return FALSE;
 }
-#endif
 
 void bar_pane_exif_entry_write_config(GtkWidget *entry, GString *outstr, gint indent)
 {
@@ -710,14 +703,14 @@ void bar_pane_exif_write_config(GtkWidget *pane, GString *outstr, gint indent)
 	if (!ped) return;
 
 	WRITE_NL(); WRITE_STRING("<pane_exif ");
-	write_char_option(outstr, "id", ped->pane.id);
-	write_char_option(outstr, "title", gtk_label_get_text(GTK_LABEL(ped->pane.title)));
+	WRITE_CHAR(ped->pane, id);
+	WRITE_CHAR_FULL("title", gtk_label_get_text(GTK_LABEL(ped->pane.title)));
 	WRITE_BOOL(ped->pane, expanded);
 	WRITE_BOOL(*ped, show_all);
 	WRITE_STRING(">");
 	indent++;
 
-	g_autoptr(GList) list = gtk_container_get_children(GTK_CONTAINER(ped->vbox));
+	g_autoptr(GList) list = gq_gtk_widget_get_children(GTK_WIDGET(ped->vbox));
 	for (GList *work = list; work; work = work->next)
 		{
 		auto entry = static_cast<GtkWidget *>(work->data);
@@ -765,7 +758,7 @@ GtkWidget *bar_pane_exif_new(const gchar *id, const gchar *title, gboolean expan
 	ped->size_group = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
 	ped->widget = gtk_event_box_new();
 	ped->vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, PREF_PAD_GAP);
-	gq_gtk_container_add(GTK_WIDGET(ped->widget), ped->vbox);
+	gq_gtk_container_add(ped->widget, ped->vbox);
 	gtk_widget_show(ped->vbox);
 
 	ped->min_height = MIN_HEIGHT;
@@ -848,9 +841,9 @@ void bar_pane_exif_update_from_config(GtkWidget *pane, const gchar **attribute_n
 		const gchar *value = *attribute_values++;
 
 		if (READ_CHAR_FULL("title", title)) continue;
-		if (READ_BOOL_FULL("expanded", ped->pane.expanded)) continue;
-		if (READ_BOOL_FULL("show_all", ped->show_all)) continue;
-		if (READ_CHAR_FULL("id", ped->pane.id)) continue;
+		if (READ_BOOL(ped->pane, expanded)) continue;
+		if (READ_BOOL(*ped, show_all)) continue;
+		if (READ_CHAR(ped->pane, id)) continue;
 
 		config_file_error((std::string("Unknown attribute: ") + option + " = " + value).c_str());
 		}

@@ -32,7 +32,6 @@
 #include "intl.h"
 #include "main-defines.h"
 #include "options.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 #include "ui-utildlg.h"
 #include "utilops.h"
@@ -84,7 +83,7 @@ static gint file_util_safe_number(gint64 free_space)
 
 		if (!sorted)
 			{
-			list = filelist_sort(list, SORT_NAME, TRUE, TRUE);
+			list = filelist_sort(list, {SORT_NAME, TRUE, TRUE});
 			sorted = TRUE;
 			}
 
@@ -129,7 +128,6 @@ static void move_to_trash_failed_cb(GenericDialog *, gpointer)
 gboolean file_util_safe_unlink(const gchar *path)
 {
 	static GenericDialog *gd = nullptr;
-	gchar *result = nullptr;
 	gboolean success = TRUE;
 
 	if (!isfile(path)) return FALSE;
@@ -146,6 +144,8 @@ gboolean file_util_safe_unlink(const gchar *path)
 		}
 	else if (!options->file_ops.use_system_trash)
 		{
+		const gchar *result = nullptr;
+
 		if (!isdir(options->file_ops.safe_delete_path))
 			{
 			DEBUG_1("creating trash: %s", options->file_ops.safe_delete_path);

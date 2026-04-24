@@ -35,13 +35,30 @@
 
 #include "compat-deprecated.h"
 #include "compat.h"
+#include "geometry.h"
 #include "history-list.h"
+#include "layout-util.h"
 #include "layout.h"
 #include "main-defines.h"
 #include "misc.h"
-#include "options.h"
-#include "typedefs.h"
-#include "utilops.h"
+
+namespace
+{
+
+void pref_link_sensitivity_cb(GtkWidget *watch, GtkStateFlags, gpointer data)
+{
+	auto *widget = static_cast<GtkWidget *>(data);
+
+	gtk_widget_set_sensitive(widget, gtk_widget_is_sensitive(watch));
+}
+
+inline void pref_link_sensitivity(GtkWidget *widget, GtkWidget *watch)
+{
+	g_signal_connect(G_OBJECT(watch), "state-flags-changed",
+	                 G_CALLBACK(pref_link_sensitivity_cb), widget);
+}
+
+} // namespace
 
 /*
  *-----------------------------------------------------------------------------
@@ -74,7 +91,7 @@ GtkWidget *pref_group_new(GtkWidget *parent_box, gboolean fill,
 	if (GTK_IS_ORIENTABLE(parent_box) &&
 	    gtk_orientable_get_orientation(GTK_ORIENTABLE(parent_box)) == GTK_ORIENTATION_VERTICAL)
 		{
-		g_autoptr(GList) list = gtk_container_get_children(GTK_CONTAINER(parent_box));
+		g_autoptr(GList) list = gq_gtk_widget_get_children(GTK_WIDGET(parent_box));
 		if (list)
 			{
 			pref_spacer(vbox, PREF_PAD_GROUP - PREF_PAD_GAP);
@@ -145,7 +162,7 @@ GtkWidget *pref_frame_new(GtkWidget *parent_box, gboolean fill,
 	gtk_widget_show(frame);
 
 	box = gtk_box_new(orientation, padding);
-	gq_gtk_container_add(GTK_WIDGET(frame), box);
+	gq_gtk_container_add(frame, box);
 	gtk_container_set_border_width(GTK_CONTAINER(box), PREF_PAD_BORDER);
 	gtk_widget_show(box);
 
@@ -201,31 +218,10 @@ GtkWidget *pref_label_new_mnemonic(GtkWidget *parent_box, const gchar *text, Gtk
 
 void pref_label_bold(GtkWidget *label, gboolean bold, gboolean increase_size)
 {
-	PangoAttrList *pal;
-	PangoAttribute *pa;
-
-	if (!bold && !increase_size) return;
-
-	pal = pango_attr_list_new();
-
-	if (bold)
-		{
-		pa = pango_attr_weight_new(PANGO_WEIGHT_BOLD);
-		pa->start_index = 0;
-		pa->end_index = G_MAXINT;
-		pango_attr_list_insert(pal, pa);
-		}
-
-	if (increase_size)
-		{
-		pa = pango_attr_scale_new(PANGO_SCALE_LARGE);
-		pa->start_index = 0;
-		pa->end_index = G_MAXINT;
-		pango_attr_list_insert(pal, pa);
-		}
+	g_autoptr(PangoAttrList) pal = get_pango_attr_list(bold, increase_size);
+	if (!pal) return;
 
 	gtk_label_set_attributes(GTK_LABEL(label), pal);
-	pango_attr_list_unref(pal);
 }
 
 GtkWidget *pref_button_new(GtkWidget *parent_box, const gchar *icon_name,
@@ -398,7 +394,7 @@ static GtkWidget *real_pref_spin_new(GtkWidget *parent_box, const gchar *text, c
 
 	if (func)
 		{
-		g_signal_connect(G_OBJECT(spin), "value_changed", G_CALLBACK(func), data);
+		g_signal_connect(G_OBJECT(spin), "value-changed", G_CALLBACK(func), data);
 		}
 
 	if (text)
@@ -436,10 +432,10 @@ GtkWidget *pref_spin_new(GtkWidget *parent_box, const gchar *text, const gchar *
 				  min, max, step, digits, value, func, data);
 }
 
-static void pref_spin_int_cb(GtkWidget *widget, gpointer data)
+static void pref_spin_int_cb(GtkSpinButton *spin_button, gpointer data)
 {
-	auto var = static_cast<gint *>(data);
-	*var = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget));
+	auto *var = static_cast<gint *>(data);
+	*var = gtk_spin_button_get_value_as_int(spin_button);
 }
 
 GtkWidget *pref_spin_new_int(GtkWidget *parent_box, const gchar *text, const gchar *suffix,
@@ -451,19 +447,6 @@ GtkWidget *pref_spin_new_int(GtkWidget *parent_box, const gchar *text, const gch
 			     static_cast<gdouble>(min), static_cast<gdouble>(max), static_cast<gdouble>(step), 0,
 			     value,
 			     G_CALLBACK(pref_spin_int_cb), value_var);
-}
-
-static void pref_link_sensitivity_cb(GtkWidget *watch, GtkStateType, gpointer data)
-{
-	auto widget = static_cast<GtkWidget *>(data);
-
-	gtk_widget_set_sensitive(widget, gtk_widget_is_sensitive(watch));
-}
-
-void pref_link_sensitivity(GtkWidget *widget, GtkWidget *watch)
-{
-	g_signal_connect(G_OBJECT(watch), "state_changed",
-			 G_CALLBACK(pref_link_sensitivity_cb), widget);
 }
 
 void pref_signal_block_data(GtkWidget *widget, gpointer data)
@@ -568,7 +551,7 @@ GtkWidget *pref_table_spin(GtkWidget *table, gint column, gint row,
 	gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin), value);
 	if (func)
 		{
-		g_signal_connect(G_OBJECT(spin), "value_changed", G_CALLBACK(func), data);
+		g_signal_connect(G_OBJECT(spin), "value-changed", G_CALLBACK(func), data);
 		}
 
 	if (text)
@@ -652,7 +635,7 @@ GtkWidget *pref_toolbar_button(GtkWidget *toolbar,
 	gtk_tool_button_set_use_underline(GTK_TOOL_BUTTON(item), TRUE);
 
 	if (func) g_signal_connect(item, "clicked", func, data);
-	gq_gtk_container_add(GTK_WIDGET(toolbar), item);
+	gq_gtk_container_add(toolbar, item);
 	gtk_widget_show(item);
 
 	if (description)
@@ -694,9 +677,7 @@ static void date_selection_popup_hide(DateSelection *ds)
 
 	if (gtk_widget_has_grab(ds->window))
 		{
-		gtk_grab_remove(ds->window);
-		gq_gdk_keyboard_ungrab(GDK_CURRENT_TIME);
-		gq_gdk_pointer_ungrab(GDK_CURRENT_TIME);
+		widget_input_ungrab(ds->window);
 		}
 
 	gtk_widget_hide(ds->window);
@@ -719,12 +700,11 @@ static gboolean date_selection_popup_release_cb(GtkWidget *, GdkEventButton *, g
 static gboolean date_selection_popup_press_cb(GtkWidget *, GdkEventButton *event, gpointer data)
 {
 	auto ds = static_cast<DateSelection *>(data);
-	GdkWindow *window = gtk_widget_get_window(ds->window);
 
 	auto xr = static_cast<gint>(event->x_root);
 	auto yr = static_cast<gint>(event->y_root);
 
-	if (!window_received_event(window, {xr, yr}))
+	if (!widget_received_event(ds->window, {xr, yr}))
 		{
 		g_signal_connect(G_OBJECT(ds->window), "button_release_event",
 				 G_CALLBACK(date_selection_popup_release_cb), ds);
@@ -778,20 +758,6 @@ static gboolean date_selection_popup_keypress_cb(GtkWidget *, GdkEventKey *event
 	return FALSE;
 }
 
-static void date_selection_day_cb(GtkWidget *, gpointer data)
-{
-	auto ds = static_cast<DateSelection *>(data);
-
-	date_selection_popup_sync(ds);
-}
-
-static void date_selection_doubleclick_cb(GtkWidget *, gpointer data)
-{
-	auto ds = static_cast<DateSelection *>(data);
-
-	date_selection_popup_hide(ds);
-}
-
 static void date_selection_popup(DateSelection *ds)
 {
 	GDateTime *date;
@@ -812,7 +778,7 @@ static void date_selection_popup(DateSelection *ds)
 			 G_CALLBACK(date_selection_popup_keypress_cb), ds);
 
 	ds->calendar = gtk_calendar_new();
-	gq_gtk_container_add(GTK_WIDGET(ds->window), ds->calendar);
+	gq_gtk_container_add(ds->window, ds->calendar);
 	gtk_widget_show(ds->calendar);
 
 	date = date_selection_get(ds->box);
@@ -824,10 +790,10 @@ static void date_selection_popup(DateSelection *ds)
 #endif
 	g_date_time_unref(date);
 
-	g_signal_connect(G_OBJECT(ds->calendar), "day_selected",
-			 G_CALLBACK(date_selection_day_cb), ds);
-	g_signal_connect(G_OBJECT(ds->calendar), "day_selected_double_click",
-			G_CALLBACK(date_selection_doubleclick_cb), ds);
+	g_signal_connect_swapped(G_OBJECT(ds->calendar), "day-selected",
+	                         G_CALLBACK(date_selection_popup_sync), ds);
+	g_signal_connect_swapped(G_OBJECT(ds->calendar), "day-selected-double-click",
+	                         G_CALLBACK(date_selection_popup_hide), ds);
 
 	gtk_widget_realize(ds->window);
 
@@ -839,7 +805,7 @@ static void date_selection_popup(DateSelection *ds)
 	x = wx + button_allocation.x + button_allocation.width - window_allocation.width;
 	y = wy + button_allocation.y + button_allocation.height;
 
-	if (y + window_allocation.height > gq_gdk_screen_height())
+	if (y + window_allocation.height > deprecated_gdk_screen_height())
 		{
 		y = wy + button_allocation.y - window_allocation.height;
 		}
@@ -850,11 +816,8 @@ static void date_selection_popup(DateSelection *ds)
 	gtk_widget_show(ds->window);
 
 	gtk_widget_grab_focus(ds->calendar);
-	gq_gdk_pointer_grab(gtk_widget_get_window(ds->window), TRUE,
-	                    static_cast<GdkEventMask>(GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_BUTTON_MOTION_MASK),
-	                    nullptr, nullptr, GDK_CURRENT_TIME);
-	gq_gdk_keyboard_grab(gtk_widget_get_window(ds->window), TRUE, GDK_CURRENT_TIME);
-	gtk_grab_add(ds->window);
+	widget_input_grab(ds->window, GDK_SEAT_CAPABILITY_ALL, TRUE,
+	                  static_cast<GdkEventMask>(GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_BUTTON_MOTION_MASK));
 
 	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ds->button), TRUE);
 }
@@ -873,7 +836,7 @@ static void button_size_allocate_cb(GtkWidget *button, GtkAllocation *allocation
 {
 	auto spin = static_cast<GtkWidget *>(data);
 	GtkRequisition spin_requisition;
-	gq_gtk_widget_get_requisition(spin, &spin_requisition);
+	deprecated_gtk_widget_get_requisition(spin, &spin_requisition);
 
 	if (allocation->height > spin_requisition.height)
 		{
@@ -887,14 +850,6 @@ static void button_size_allocate_cb(GtkWidget *button, GtkAllocation *allocation
 			(spin_allocation.height - spin_requisition.height) / 2;
 		gtk_widget_size_allocate(button, &button_allocation);
 		}
-}
-
-static void spin_increase(GtkWidget *spin, gint value)
-{
-	GtkRequisition req;
-
-	gq_gtk_widget_size_request(spin, &req);
-	gtk_widget_set_size_request(spin, req.width + value, -1);
 }
 
 static void date_selection_destroy_cb(GtkWidget *, gpointer data)
@@ -949,14 +904,12 @@ GtkWidget *date_selection_new()
 		ds->spin_y = pref_spin_new(ds->box, nullptr, nullptr, 1900, 9999, 1, 0, 1900, nullptr, nullptr);
 		}
 
-	spin_increase(ds->spin_y, 5);
-
 	ds->button = gtk_toggle_button_new();
 	g_signal_connect(G_OBJECT(ds->button), "size_allocate",
 			 G_CALLBACK(button_size_allocate_cb), ds->spin_y);
 
 	icon = gtk_image_new_from_icon_name(GQ_ICON_PAN_DOWN, GTK_ICON_SIZE_BUTTON);
-	gq_gtk_container_add(GTK_WIDGET(ds->button), icon);
+	gq_gtk_container_add(ds->button, icon);
 	gtk_widget_show(icon);
 
 	gq_gtk_box_pack_start(GTK_BOX(ds->box), ds->button, FALSE, FALSE, 0);
@@ -1109,34 +1062,17 @@ void pref_list_int_set(const gchar *group, const gchar *key, gint value)
 	pref_list_set(group, key, PREF_LIST_MARKER_INT, std::to_string(value).c_str());
 }
 
-gboolean pref_list_int_get(const gchar *group, const gchar *key, gint *result)
+gint pref_list_int_get(const gchar *group, const gchar *key, gint fallback)
 {
+	if (!group || !key) return fallback;
+
 	const gchar *text;
+	if (!pref_list_get(group, key, PREF_LIST_MARKER_INT, &text) || !text) return fallback;
 
-	if (!group || !key)
-		{
-		*result = 0;
-		return FALSE;
-		}
-
-	if (pref_list_get(group, key, PREF_LIST_MARKER_INT, &text) && text)
-		{
-		*result = static_cast<gint>(strtol(text, nullptr, 10));
-		return TRUE;
-		}
-
-	*result = 0;
-	return FALSE;
+	return static_cast<gint>(strtol(text, nullptr, 10));
 }
 
-void pref_color_button_set_cb(GtkWidget *widget, gpointer data)
-{
-	auto color = static_cast<GdkRGBA *>(data);
-
-	gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(widget), color);
-}
-
-GtkWidget *pref_color_button_new(GtkWidget *parent_box, const gchar *title, GdkRGBA *color, GCallback func, gpointer data)
+GtkWidget *pref_color_button_new(GtkWidget *parent_box, const gchar *title, const GdkRGBA *color, GdkRGBA *result)
 {
 	GtkWidget *button;
 
@@ -1149,7 +1085,11 @@ GtkWidget *pref_color_button_new(GtkWidget *parent_box, const gchar *title, GdkR
 		button = gtk_color_button_new();
 		}
 
-	if (func) g_signal_connect(G_OBJECT(button), "color-set", func, data);
+	if (result)
+		{
+		g_signal_connect(G_OBJECT(button), "color-set", G_CALLBACK(gtk_color_chooser_get_rgba), result);
+		*result = *color;
+		}
 
 	if (title)
 		{
@@ -1312,6 +1252,28 @@ static gchar *get_action_label(GtkAction *action, const gchar *action_name)
 	return g_strdup(label);
 }
 
+static void action_to_list_duplicates(gpointer data, gpointer user_data)
+{
+	GtkAction *action = deprecated_GTK_ACTION(data);
+
+	const gchar *accel_path = deprecated_gtk_action_get_accel_path(action);
+	if (!accel_path || !gtk_accel_map_lookup_entry(accel_path, nullptr)) return;
+
+	g_autofree gchar *action_name = g_path_get_basename(accel_path);
+
+	/* Menu actions are irrelevant */
+	if (g_strstr_len(action_name, -1, "Menu") != nullptr) return;
+
+	g_autofree gchar *action_label = get_action_label(action, action_name);
+
+#if HAVE_GTK4
+	/* @FIXME GTK4 stub */
+#else
+	auto *list_duplicates = static_cast<std::vector<ActionItem> *>(user_data);
+	list_duplicates->emplace_back(action_name, action_label, deprecated_gtk_action_get_stock_id(action));
+#endif
+}
+
 /**
  * @brief Get a list of menu actions
  * @param
@@ -1323,35 +1285,10 @@ static gchar *get_action_label(GtkAction *action, const gchar *action_name)
 std::vector<ActionItem> get_action_items()
 {
 	LayoutWindow *lw = get_current_layout();
-	if (!lw)
-		{
-		return {};
-		}
+	if (!lw) return {};
 
 	std::vector<ActionItem> list_duplicates;
-
-	for (GList *groups = gq_gtk_ui_manager_get_action_groups(lw->ui_manager); groups; groups = groups->next)
-		{
-		GtkActionGroup *action_group = GQ_GTK_ACTION_GROUP(groups->data);
-		for (GList *actions = gq_gtk_action_group_list_actions(action_group); actions; actions = actions->next)
-			{
-			GtkAction *action = GQ_GTK_ACTION(actions->data);
-
-			const gchar *accel_path = gq_gtk_action_get_accel_path(action);
-			if (accel_path && gtk_accel_map_lookup_entry(accel_path, nullptr))
-				{
-				g_autofree gchar *action_name = g_path_get_basename(accel_path);
-
-				/* Menu actions are irrelevant */
-				if (g_strstr_len(action_name, -1, "Menu") == nullptr)
-					{
-					g_autofree gchar *action_label = get_action_label(action, action_name);
-
-					list_duplicates.emplace_back(action_name, action_label, gq_gtk_action_get_stock_id(action));
-					}
-				}
-			}
-		}
+	layout_actions_foreach(lw, action_to_list_duplicates, &list_duplicates);
 
 	/* Use the shortest name i.e. ignore -Alt versions. Sort makes the shortest first in the list */
 	const auto action_item_compare_names = [](const ActionItem &a, const ActionItem &b)
@@ -1377,47 +1314,6 @@ std::vector<ActionItem> get_action_items()
 	return list_unique;
 }
 
-bool defined_mouse_buttons(GdkEventButton *event, gpointer data)
-{
-	bool ret = false;
-
-	const auto handle_button = [data](const gchar *action_name)
-	{
-		if (!action_name) return false;
-
-		auto *lw = static_cast<LayoutWindow *>(data);
-
-		if (g_strstr_len(action_name, -1, ".desktop") != nullptr)
-			{
-			file_util_start_editor_from_filelist(action_name, layout_selection_list(lw), layout_get_path(lw), lw->window);
-			}
-		else
-			{
-			GtkAction *action = gq_gtk_action_group_get_action(lw->action_group, action_name);
-			if (action)
-				{
-				gq_gtk_action_activate(action);
-				}
-			}
-
-		return true;
-	};
-
-	switch (event->button)
-		{
-		case MOUSE_BUTTON_8:
-			ret = handle_button(options->mouse_button_8);
-			break;
-		case MOUSE_BUTTON_9:
-			ret = handle_button(options->mouse_button_9);
-			break;
-		default:
-			break;
-		}
-
-	return ret;
-}
-
 GdkPixbuf *gq_gtk_icon_theme_load_icon_copy(GtkIconTheme *icon_theme, const gchar *icon_name, gint size, GtkIconLookupFlags flags)
 {
 	g_autoptr(GError) error = nullptr;
@@ -1427,22 +1323,86 @@ GdkPixbuf *gq_gtk_icon_theme_load_icon_copy(GtkIconTheme *icon_theme, const gcha
 	return gdk_pixbuf_copy(icon);
 }
 
-gboolean window_get_pointer_position(GdkWindow *window, GdkPoint &pos)
+gboolean widget_get_pointer_position(GtkWidget *widget, GqPoint &pos)
 {
+#if HAVE_GTK4
+
+	GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(widget));
+
+	if (!surface)
+		{
+		return rect;
+		}
+
+	if (!surface)
+		return FALSE;
+
+	GdkDisplay *display = gdk_surface_get_display(surface);
+	if (!display)
+		return FALSE;
+
+	GdkSeat *seat = gdk_display_get_default_seat(display);
+	if (!seat)
+		return FALSE;
+
+	GdkDevice *device = gdk_seat_get_pointer(seat);
+	if (!device)
+		return FALSE;
+
+	GdkSurface *pointer_surface = nullptr;
+	double x = 0.0, y = 0.0;
+
+	gdk_device_get_position(device, &pointer_surface, &x, &y);
+
+	if (pointer_surface != surface)
+		return FALSE;
+
+	pos.x = (int)x;
+	pos.y = (int)y;
+
+	int width  = gdk_surface_get_width(surface);
+	int height = gdk_surface_get_height(surface);
+
+	return 0 <= pos.x && pos.x < width && 0 <= pos.y && pos.y < height;
+#else
+	GdkWindow *window = gtk_widget_get_window(widget);
+
+	if (!window)
+		{
+		return FALSE;
+		}
+
 	GdkSeat *seat = gdk_display_get_default_seat(gdk_window_get_display(window));
 	GdkDevice *device = gdk_seat_get_pointer(seat);
 
-	gdk_window_get_device_position(window, device, &pos.x, &pos.y, nullptr);
+	get_pointer_position(widget, device, &pos.x, &pos.y, nullptr);
 	gint width = gdk_window_get_width(window);
 	gint height = gdk_window_get_height(window);
 
-	return 0 <= pos.x && pos.x < width &&
-	       0 <= pos.y && pos.y < height;
+	return 0 <= pos.x && pos.x < width && 0 <= pos.y && pos.y < height;
+#endif
 }
 
-GdkRectangle window_get_position_geometry(GdkWindow *window)
+GdkRectangle widget_get_position_geometry(GtkWidget *widget)
 {
-	GdkRectangle rect;
+	GdkRectangle rect = {};
+
+#if HAVE_GTK4
+	GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(widget));
+
+	if (!surface)
+		{
+		return rect;
+		}
+
+	gdk_surface_get_position(surface, &rect.x, &rect.y);
+	rect.width  = gdk_surface_get_width(surface);
+	rect.height = gdk_surface_get_height(surface);
+
+	return rect;
+}
+#else
+	GdkWindow *window = gtk_widget_get_window(widget);
 
 	gdk_window_get_position(window, &rect.x, &rect.y);
 	rect.width = gdk_window_get_width(window);
@@ -1450,29 +1410,188 @@ GdkRectangle window_get_position_geometry(GdkWindow *window)
 
 	return rect;
 }
+#endif
 
-GdkRectangle window_get_root_origin_geometry(GdkWindow *window)
+GdkRectangle widget_get_root_origin_geometry(GtkWidget *widget)
 {
-	GdkRectangle rect;
+	GdkRectangle rect = {};
 
-	gdk_window_get_root_origin(window, &rect.x, &rect.y);
-	rect.width = gdk_window_get_width(window);
-	rect.height = gdk_window_get_height(window);
+#if HAVE_GTK4
+	GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(widget));
+
+	if (!surface)
+		{
+		return rect;
+		}
+
+	rect.width  = gdk_surface_get_width(surface);
+	rect.height = gdk_surface_get_height(surface);
 
 	return rect;
+#else
+	GdkWindow *win = gtk_widget_get_window(widget);
+
+	gdk_window_get_root_origin(win, &rect.x, &rect.y);
+	rect.width = gdk_window_get_width(win);
+	rect.height = gdk_window_get_height(win);
+
+	return rect;
+#endif
 }
 
-gboolean window_received_event(GdkWindow *window, GdkPoint event)
+gboolean widget_received_event(GtkWidget *widget, GqPoint event)
 {
+#if HAVE_GTK4
+	GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(widget));
+
+	if (!surface)
+		{
+		return FALSE;
+		}
+
+	int width  = gdk_surface_get_width(surface);
+	int height = gdk_surface_get_height(surface);
+
+	return 0 <= event.x && event.x <= width && 0 <= event.y && event.y <= height;
+
+#else
+	GdkWindow *window = gtk_widget_get_window(widget);
+
+	if (!window)
+		{
+		return FALSE;
+		}
+
 	gint x;
 	gint y;
 	gdk_window_get_origin(window, &x, &y);
 
-	gint widht = gdk_window_get_width(window);
+	gint width  = gdk_window_get_width(window);
 	gint height = gdk_window_get_height(window);
 
-	return x <= event.x && event.x <= x + widht &&
+	return x <= event.x && event.x <= x + width &&
 	       y <= event.y && event.y <= y + height;
+}
+#endif
+
+void widget_remove_from_parent(GtkWidget *widget)
+{
+	gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(widget)), widget);
+}
+
+void widget_remove_from_parent_cb(GtkWidget *, gpointer data)
+{
+	widget_remove_from_parent(static_cast<GtkWidget *>(data));
+}
+
+void widget_input_grab(GtkWidget *widget, GdkSeatCapabilities capabilities, gboolean owner_events, GdkEventMask event_mask)
+{
+	GdkWindow *window = gtk_widget_get_window(widget);
+
+	const GdkEventMask prev_event_mask = gdk_window_get_events(window);
+	g_object_set_data(G_OBJECT(window), "prev_event_mask", GINT_TO_POINTER(prev_event_mask));
+	gdk_window_set_events(window, event_mask);
+
+	GdkDisplay *display = gdk_window_get_display(window);
+	GdkSeat *seat = gdk_display_get_default_seat(display);
+
+	gdk_seat_grab(seat, window, capabilities, owner_events,
+	              nullptr, nullptr, nullptr, nullptr);
+
+	gtk_grab_add(widget);
+}
+
+void widget_input_ungrab(GtkWidget *widget)
+{
+	GdkWindow *window = gtk_widget_get_window(widget);
+
+	const auto prev_event_mask = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(window), "prev_event_mask"));
+	gdk_window_set_events(window, static_cast<GdkEventMask>(prev_event_mask));
+
+	GdkDisplay *display = gdk_window_get_display(window);
+	GdkSeat *seat = gdk_display_get_default_seat(display);
+
+	gdk_seat_ungrab(seat);
+	gtk_grab_remove(widget);
+}
+
+gboolean get_pointer_position(GtkWidget *widget, GdkDevice *device, int *x, int *y, GdkModifierType *mask)
+{
+#if HAVE_GTK4
+	GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(widget));
+	GdkSurface *ps = NULL;
+	double dx;
+	double dy;
+
+	gdk_device_get_position(device, &ps, &dx, &dy);
+	if (ps != surface)
+		{
+		return FALSE;
+		}
+
+	*x = (int)dx;
+	*y = (int)dy;
+
+	return TRUE;
+#else
+	gdk_window_get_device_position(gtk_widget_get_window(widget), device, x, y, mask);
+
+	return TRUE;
+#endif
+}
+
+void get_device_position(GdkDevice *device, int &x, int &y)
+{
+#if HAVE_GTK4
+	double dx = 0.0;
+	double dy = 0.0;
+	GdkSurface *surface = nullptr;
+
+	if (!device)
+		{
+		x = y = -1;
+		return;
+		}
+
+	gdk_device_get_position(device, &surface, &dx, &dy);
+
+	if (!surface)
+		{
+		/* Pointer not over any surface */
+		x = y = -1;
+		return;
+		}
+
+	x = (int)dx;
+	y = (int)dy;
+#else
+	gdk_device_get_position(device, nullptr, &x, &y);
+#endif
+}
+
+PangoAttrList *get_pango_attr_list(gboolean weight, gboolean scale)
+{
+	if (!weight && !scale) return nullptr;
+
+	PangoAttrList *pal = pango_attr_list_new();
+
+	if (weight)
+		{
+		PangoAttribute *pa = pango_attr_weight_new(PANGO_WEIGHT_BOLD);
+		pa->start_index = 0;
+		pa->end_index = G_MAXINT;
+		pango_attr_list_insert(pal, pa);
+		}
+
+	if (scale)
+		{
+		PangoAttribute *pa = pango_attr_scale_new(PANGO_SCALE_LARGE);
+		pa->start_index = 0;
+		pa->end_index = G_MAXINT;
+		pango_attr_list_insert(pal, pa);
+		}
+
+	return pal;
 }
 
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

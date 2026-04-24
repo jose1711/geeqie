@@ -25,7 +25,7 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
+#include "utilops.h"
 
 enum NotifyType : gint;
 
@@ -36,11 +36,16 @@ class FileData;
 #define ORIENTATION_KEY "Xmp.tiff.Orientation"
 #define RATING_KEY "Xmp.xmp.Rating"
 
+enum MetadataFormat : gint {
+	METADATA_PLAIN     = 0, /**< format that can be edited and written back */
+	METADATA_FORMATTED = 1  /**< for display only */
+};
+
 void metadata_cache_free(FileData *fd);
 
 gboolean metadata_write_queue_remove(FileData *fd);
 gboolean metadata_write_perform(FileData *fd);
-gboolean metadata_write_queue_confirm(gboolean force_dialog, FileUtilDoneFunc done_func, gpointer done_data);
+gboolean metadata_write_queue_confirm(gboolean force_dialog, const FileUtilDoneFunc &done_func);
 void metadata_notify_cb(FileData *fd, NotifyType type, gpointer data);
 
 gint metadata_queue_length();
@@ -83,7 +88,7 @@ gchar *keyword_get_mark(GtkTreeModel *keyword_tree, GtkTreeIter *iter);
 gchar *keyword_get_casefold(GtkTreeModel *keyword_tree, GtkTreeIter *iter);
 gboolean keyword_get_is_keyword(GtkTreeModel *keyword_tree, GtkTreeIter *iter);
 
-gboolean keyword_compare(GtkTreeModel *keyword_tree, GtkTreeIter *a, GtkTreeIter *b);
+gboolean keyword_equal(GtkTreeModel *keyword_tree, GtkTreeIter *a, GtkTreeIter *b);
 gboolean keyword_same_parent(GtkTreeModel *keyword_tree, GtkTreeIter *a, GtkTreeIter *b);
 gboolean keyword_exists(GtkTreeModel *keyword_tree, GtkTreeIter *parent_ptr, GtkTreeIter *sibling, const gchar *name, gboolean exclude_sibling, GtkTreeIter *result);
 

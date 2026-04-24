@@ -1,7 +1,7 @@
 # Coding and Documentation Style
 
 [Error Logging](#error-logging)  
-[GPL header](#gpl-header)  
+[SPDX license](#spdx-license)  
 [Git change log](#git-change-log)  
 [Source Code Style](#source-code-style)  
 [Shell Script Style](#shell-script-style)  
@@ -52,6 +52,11 @@ Use only for temporary debugging i.e. not in code in the repository
 Prints a dump of the FileData hash list as a ref. count followed by the full path of the item.
 Use only for temporary debugging i.e. not in code in the repository
 
+### DEBUG_RU()
+
+Prints memory usage and runtime from `getrusage`.
+Use only for temporary debugging i.e. not in code in the repository
+
 ### Log Window
 
 When the Log Window has focus, the F1 key executes the action specified in `Edit/Preferences/Behavior/Log Window F1 Command` with the selected text as a parameter.
@@ -60,35 +65,13 @@ This feature may be used to open an editor at a file location in the text string
 
 ---
 
-## GPL header
+## SPDX license
 
-Include a header in every file, like this:  
+In all new files include a header, like this:
 
 ```c
-/*
- * Copyright (C) <year> The Geeqie Team
- *
- * Author: Author1  
- * Author: Author2  
- *  
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
- *
- * Optional description of purpose of file.
- *
-*/  
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 ```
 
 ---
@@ -200,7 +183,7 @@ Pragma: (Indentation 2 spaces)
 Headers:
 
 ```c
-#ifndef _FILENAME_H
+#ifndef FILENAME_H
 ```
 
 Use [Names and Order of Includes](https://google.github.io/styleguide/cppguide.html#Names_and_Order_of_Includes) for headers include order.
@@ -217,6 +200,20 @@ Use glib types when possible (ie. gint and gchar instead of int and char).
 Use glib functions when possible (i.e. `g_ascii_isspace()` instead of `isspace()`).  
 Check if used functions are not deprecated.  
 
+### C++ style
+
+In the case that both the following lines are syntactically correct, in order to emphasise the use of a pointer use:
+
+```c
+auto *var = function();
+```
+
+and not:
+
+```c
+auto var = function();
+```
+
 ---
 
 ## Shell Script Style
@@ -227,7 +224,7 @@ Use `printf` rather than `echo` except for plain text.
 There are several versions of `mktemp`. Using the following definition helps portability (note that `template` is not optional):
 
 ```sh
-mktemp [-d] [-q] template ...
+mktemp [-d] [-q] template …
 ```
 
 and use for example this style:
@@ -410,6 +407,9 @@ Script files such as .sh, .pl, and .awk should have the file relevant file exten
 Doxygen comments should start each line with `##`, and each file should contain:
 
 ```sh
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 ## @file
 ## @brief <one line description>
 ## <contents description>
@@ -425,7 +425,7 @@ For a newline use two spaces (a backslash is not interpreted correctly by Doxyge
 For further documentation about Doxygen see the [Doxygen Manual](https://www.doxygen.nl/index.html).  
 For the possible commands you may use, see [Doxygen Special Commands](https://www.doxygen.nl/manual/commands.html).
 
-The file `./scripts/doxygen-help.sh` may be used to integrate access to the Doxygen files into a code editor.
+The file `./tools/doxygen-help.sh` may be used to integrate access to the Doxygen files into a code editor.
 
 The following environment variables may be set to personalize the Doxygen output:
 

@@ -22,12 +22,15 @@
 #ifndef COLOR_MAN_H
 #define COLOR_MAN_H
 
+#include <memory>
+#include <optional>
+#include <string>
+
 #include <gdk-pixbuf/gdk-pixbuf.h>
+#include <gdk/gdk.h>
 #include <glib.h>
 
-struct ImageWindow;
-
-enum ColorManProfileType {
+enum ColorManProfileType : int {
 	COLOR_PROFILE_NONE = -1,
 	COLOR_PROFILE_MEM = -2,
 	COLOR_PROFILE_SRGB = 0,
@@ -35,44 +38,40 @@ enum ColorManProfileType {
 	COLOR_PROFILE_FILE,
 };
 
-enum ColorManReturnType {
-	COLOR_RETURN_SUCCESS = 0,
-	COLOR_RETURN_ERROR,
-	COLOR_RETURN_IMAGE_CHANGED
+struct ColorManStatus {
+	std::string image_profile;
+	std::string screen_profile;
 };
-
 
 struct ColorMan {
-	ImageWindow *imd;
-	GdkPixbuf *pixbuf;
-	gint incremental_sync;
-	gint row;
+	struct Cache;
 
-	gpointer profile;
+	explicit ColorMan(std::shared_ptr<Cache> profile)
+	    : profile(std::move(profile))
+	{}
 
-	guint idle_id; /* event source id */
+	void correct_region(GdkPixbuf *pixbuf, GdkRectangle region) const;
+	std::optional<ColorManStatus> get_status() const;
 
-	using DoneFunc = void (*)(ColorMan *, ColorManReturnType, gpointer);
-	DoneFunc func_done;
-	gpointer func_done_data;
+private:
+	std::shared_ptr<Cache> profile;
 };
 
+struct ColorManMemData {
+	std::unique_ptr<guchar, decltype(&g_free)> ptr{nullptr, g_free};
+	guint len = 0;
+};
 
-ColorMan *color_man_new(ImageWindow *imd, GdkPixbuf *pixbuf,
-			ColorManProfileType input_type, const gchar *input_file,
-			ColorManProfileType screen_type, const gchar *screen_file,
-			guchar *screen_data, guint screen_data_len);
-ColorMan *color_man_new_embedded(ImageWindow *imd, GdkPixbuf *pixbuf,
-				 guchar *input_data, guint input_data_len,
-				 ColorManProfileType screen_type, const gchar *screen_file,
-				 guchar *screen_data, guint screen_data_len);
-void color_man_free(ColorMan *cm);
+ColorMan *color_man_new(const GdkPixbuf *pixbuf,
+                        ColorManProfileType input_type, const gchar *input_file,
+                        ColorManProfileType screen_type, const gchar *screen_file,
+                        const ColorManMemData &screen_data);
+ColorMan *color_man_new_embedded(const GdkPixbuf *pixbuf,
+                                 const ColorManMemData &input_data,
+                                 ColorManProfileType screen_type, const gchar *screen_file,
+                                 const ColorManMemData &screen_data);
 
 void color_man_update();
-
-void color_man_correct_region(ColorMan *cm, GdkPixbuf *pixbuf, gint x, gint y, gint w, gint h);
-
-gboolean color_man_get_status(ColorMan *cm, gchar **image_profile, gchar **screen_profile);
 
 const gchar *get_profile_name(const guchar *profile_data, guint profile_len);
 

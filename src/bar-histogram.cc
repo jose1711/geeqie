@@ -21,11 +21,12 @@
 
 #include "bar-histogram.h"
 
+#include <string>
+
 #include <cairo.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gdk/gdk.h>
 #include <glib-object.h>
-#include <string>
 
 #include <config.h>
 
@@ -35,7 +36,6 @@
 #include "histogram.h"
 #include "intl.h"
 #include "rcfile.h"
-#include "typedefs.h"
 #include "ui-menu.h"
 #include "ui-misc.h"
 
@@ -96,7 +96,7 @@ static gboolean bar_pane_histogram_update_cb(gpointer data)
 	phd->idle_id = 0;
 	phd->need_update = FALSE;
 
-	gq_gtk_widget_queue_draw_area(GTK_WIDGET(phd->drawing_area), 0, 0, phd->histogram_width, phd->histogram_height);
+	gq_gtk_widget_queue_draw_area(phd->drawing_area, 0, 0, phd->histogram_width, phd->histogram_height);
 
 	if (phd->fd != nullptr)
 		{
@@ -139,8 +139,8 @@ static void bar_pane_histogram_write_config(GtkWidget *pane, GString *outstr, gi
 	if (!phd) return;
 
 	WRITE_NL(); WRITE_STRING("<pane_histogram ");
-	write_char_option(outstr, "id", phd->pane.id);
-	write_char_option(outstr, "title", gtk_label_get_text(GTK_LABEL(phd->pane.title)));
+	WRITE_CHAR(phd->pane, id);
+	WRITE_CHAR_FULL("title", gtk_label_get_text(GTK_LABEL(phd->pane.title)));
 	WRITE_BOOL(phd->pane, expanded);
 	WRITE_INT(phd->histogram, histogram_channel);
 	WRITE_INT(phd->histogram, histogram_mode);
@@ -198,6 +198,7 @@ static void bar_pane_histogram_destroy(gpointer data)
 	g_free(phd);
 }
 
+template<HistogramChannel channel>
 static void bar_pane_histogram_popup_channels_cb(GtkWidget *widget, gpointer data)
 {
 	auto phd = static_cast<PaneHistogramData *>(data);
@@ -205,13 +206,13 @@ static void bar_pane_histogram_popup_channels_cb(GtkWidget *widget, gpointer dat
 
 	if (!gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget))) return;
 
-	gint channel = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "menu_item_radio_data"));
 	if (channel == phd->histogram.get_channel()) return;
 
 	phd->histogram.set_channel(channel);
 	bar_pane_histogram_update(phd);
 }
 
+template<HistogramMode mode>
 static void bar_pane_histogram_popup_mode_cb(GtkWidget *widget, gpointer data)
 {
 	auto phd = static_cast<PaneHistogramData *>(data);
@@ -219,7 +220,6 @@ static void bar_pane_histogram_popup_mode_cb(GtkWidget *widget, gpointer data)
 
 	if (!gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget))) return;
 
-	gint mode = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "menu_item_radio_data"));
 	if (mode == phd->histogram.get_mode()) return;
 
 	phd->histogram.set_mode(mode);
@@ -235,16 +235,16 @@ static GtkWidget *bar_pane_histogram_menu(PaneHistogramData *phd)
 	menu = popup_menu_short_lived();
 
 	/* use the same strings as in layout-util.cc */
-	menu_item_add_radio(menu, _("Histogram on _Red"),   GINT_TO_POINTER(HCHAN_R), channel == HCHAN_R, G_CALLBACK(bar_pane_histogram_popup_channels_cb), phd);
-	menu_item_add_radio(menu, _("Histogram on _Green"), GINT_TO_POINTER(HCHAN_G), channel == HCHAN_G, G_CALLBACK(bar_pane_histogram_popup_channels_cb), phd);
-	menu_item_add_radio(menu, _("Histogram on _Blue"),  GINT_TO_POINTER(HCHAN_B), channel == HCHAN_B, G_CALLBACK(bar_pane_histogram_popup_channels_cb), phd);
-	menu_item_add_radio(menu, _("_Histogram on RGB"),   GINT_TO_POINTER(HCHAN_RGB), channel == HCHAN_RGB, G_CALLBACK(bar_pane_histogram_popup_channels_cb), phd);
-	menu_item_add_radio(menu, _("Histogram on _Value"), GINT_TO_POINTER(HCHAN_MAX), channel == HCHAN_MAX, G_CALLBACK(bar_pane_histogram_popup_channels_cb), phd);
+	menu_item_add_radio(menu, _("Histogram on _Red"),   nullptr, channel == HCHAN_R, G_CALLBACK(bar_pane_histogram_popup_channels_cb<HCHAN_R>), phd);
+	menu_item_add_radio(menu, _("Histogram on _Green"), nullptr, channel == HCHAN_G, G_CALLBACK(bar_pane_histogram_popup_channels_cb<HCHAN_G>), phd);
+	menu_item_add_radio(menu, _("Histogram on _Blue"),  nullptr, channel == HCHAN_B, G_CALLBACK(bar_pane_histogram_popup_channels_cb<HCHAN_B>), phd);
+	menu_item_add_radio(menu, _("_Histogram on RGB"),   nullptr, channel == HCHAN_RGB, G_CALLBACK(bar_pane_histogram_popup_channels_cb<HCHAN_RGB>), phd);
+	menu_item_add_radio(menu, _("Histogram on _Value"), nullptr, channel == HCHAN_MAX, G_CALLBACK(bar_pane_histogram_popup_channels_cb<HCHAN_MAX>), phd);
 
 	menu_item_add_divider(menu);
 
-	menu_item_add_radio(menu, _("Li_near Histogram"), GINT_TO_POINTER(HMODE_LINEAR), mode == HMODE_LINEAR, G_CALLBACK(bar_pane_histogram_popup_mode_cb), phd);
-	menu_item_add_radio(menu, _("L_og Histogram"),    GINT_TO_POINTER(HMODE_LOG), mode == HMODE_LOG, G_CALLBACK(bar_pane_histogram_popup_mode_cb), phd);
+	menu_item_add_radio(menu, _("Li_near Histogram"), nullptr, mode == HMODE_LINEAR, G_CALLBACK(bar_pane_histogram_popup_mode_cb<HMODE_LINEAR>), phd);
+	menu_item_add_radio(menu, _("L_og Histogram"),    nullptr, mode == HMODE_LOG, G_CALLBACK(bar_pane_histogram_popup_mode_cb<HMODE_LOG>), phd);
 
 	return menu;
 }
@@ -282,7 +282,7 @@ static GtkWidget *bar_pane_histogram_new(const gchar *id, const gchar *title, gi
 
 	phd->widget = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, PREF_PAD_GAP);
 	g_object_set_data_full(G_OBJECT(phd->widget), "pane_data", phd, bar_pane_histogram_destroy);
-	gtk_widget_set_size_request(GTK_WIDGET(phd->widget), -1, height);
+	gtk_widget_set_size_request(phd->widget, -1, height);
 
 	phd->drawing_area = gtk_drawing_area_new();
 	g_signal_connect_after(G_OBJECT(phd->drawing_area), "size_allocate",
@@ -302,7 +302,7 @@ static GtkWidget *bar_pane_histogram_new(const gchar *id, const gchar *title, gi
 #else
 	gesture = gtk_gesture_multi_press_new(phd->drawing_area);
 #endif
-	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), MOUSE_BUTTON_RIGHT);
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), GDK_BUTTON_SECONDARY);
 	g_signal_connect(gesture, "pressed", G_CALLBACK(bar_pane_histogram_press_cb), phd);
 
 	gtk_widget_show(phd->widget);
@@ -353,8 +353,8 @@ void bar_pane_histogram_update_from_config(GtkWidget *pane, const gchar **attrib
 		const gchar *option = *attribute_names++;
 		const gchar *value = *attribute_values++;
 
-		if (READ_CHAR_FULL("id", phd->pane.id)) continue;
-		if (READ_BOOL_FULL("expanded", phd->pane.expanded)) continue;
+		if (READ_CHAR(phd->pane, id)) continue;
+		if (READ_BOOL(phd->pane, expanded)) continue;
 		if (READ_INT_FULL("histogram_channel", histogram_channel)) continue;
 		if (READ_INT_FULL("histogram_mode", histogram_mode)) continue;
 

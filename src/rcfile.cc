@@ -21,6 +21,7 @@
 
 #include "rcfile.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <stack>
 #include <string>
@@ -47,8 +48,8 @@
 #include "main-defines.h"
 #include "metadata.h"
 #include "options.h"
+#include "pixbuf-renderer.h"
 #include "slideshow.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 #include "ui-utildlg.h"
 
@@ -104,6 +105,26 @@ struct GQParserData
 	std::stack<ParseFunc> parse_func_stack;
 	gboolean startup = FALSE; /* reading config for the first time - add commandline and defaults */
 };
+
+template<typename T>
+bool read_unsigned_int_option(const gchar *option, const gchar *label, const gchar *value, T &n)
+{
+	if (g_ascii_strcasecmp(option, label) != 0) return false;
+
+	if (g_ascii_isdigit(value[0]))
+		{
+		n = strtoul(value, nullptr, 10);
+		}
+	else
+		{
+		if (g_ascii_strcasecmp(value, "true") == 0)
+			n = 1;
+		else
+			n = 0;
+		}
+
+	return true;
+}
 
 } // namespace
 
@@ -261,24 +282,9 @@ gboolean read_int_option(const gchar *option, const gchar *label, const gchar *v
 	return TRUE;
 }
 
-gboolean read_ushort_option(const gchar *option, const gchar *label, const gchar *value, guint16 *n)
+bool read_uchar_option(const gchar *option, const gchar *label, const gchar *value, guint8 &n)
 {
-	if (g_ascii_strcasecmp(option, label) != 0) return FALSE;
-	if (!n) return FALSE;
-
-	if (g_ascii_isdigit(value[0]))
-		{
-		*n = strtoul(value, nullptr, 10);
-		}
-	else
-		{
-		if (g_ascii_strcasecmp(value, "true") == 0)
-			*n = 1;
-		else
-			*n = 0;
-		}
-
-	return TRUE;
+	return read_unsigned_int_option(option, label, value, n);
 }
 
 void write_uint_option(GString *str, const gchar *label, guint n)
@@ -288,22 +294,7 @@ void write_uint_option(GString *str, const gchar *label, guint n)
 
 gboolean read_uint_option(const gchar *option, const gchar *label, const gchar *value, guint *n)
 {
-	if (g_ascii_strcasecmp(option, label) != 0) return FALSE;
-	if (!n) return FALSE;
-
-	if (g_ascii_isdigit(value[0]))
-		{
-		*n = strtoul(value, nullptr, 10);
-		}
-	else
-		{
-		if (g_ascii_strcasecmp(value, "true") == 0)
-			*n = 1;
-		else
-			*n = 0;
-		}
-
-	return TRUE;
+	return read_unsigned_int_option(option, label, value, *n);
 }
 
 gboolean read_uint_option_clamp(const gchar *option, const gchar *label, const gchar *value, guint *n, guint min, guint max)
@@ -311,7 +302,7 @@ gboolean read_uint_option_clamp(const gchar *option, const gchar *label, const g
 	gboolean ret;
 
 	ret = read_uint_option(option, label, value, n);
-	if (ret) *n = CLAMP(*n, min, max);
+	if (ret) *n = std::clamp(*n, min, max);
 
 	return ret;
 }
@@ -322,7 +313,7 @@ gboolean read_int_option_clamp(const gchar *option, const gchar *label, const gc
 	gboolean ret;
 
 	ret = read_int_option(option, label, value, n);
-	if (ret) *n = CLAMP(*n, min, max);
+	if (ret) *n = std::clamp(*n, min, max);
 
 	return ret;
 }
@@ -406,6 +397,7 @@ static void write_global_attributes(GString *outstr, gint indent)
 	/* General Options */
 	WRITE_NL(); WRITE_BOOL(*options, show_icon_names);
 	WRITE_NL(); WRITE_BOOL(*options, show_star_rating);
+	WRITE_NL(); WRITE_BOOL(*options, show_collection_infotext);
 	WRITE_NL(); WRITE_BOOL(*options, show_predefined_keyword_tree);
 	WRITE_SEPARATOR();
 
@@ -483,9 +475,6 @@ static void write_global_attributes(GString *outstr, gint indent)
 	WRITE_NL(); WRITE_INT(*options, file_ops.safe_delete_folder_maxsize);
 	WRITE_NL(); WRITE_BOOL(*options, file_ops.no_trash);
 
-	/* Properties dialog Options */
-	WRITE_NL(); WRITE_CHAR(*options, properties.tabs_order);
-
 	/* Image Options */
 	WRITE_NL(); WRITE_UINT(*options, image.zoom_mode);
 
@@ -533,7 +522,6 @@ static void write_global_attributes(GString *outstr, gint indent)
 	WRITE_NL(); WRITE_INT(*options, fullscreen.screen);
 	WRITE_NL(); WRITE_BOOL(*options, fullscreen.clean_flip);
 	WRITE_NL(); WRITE_BOOL(*options, fullscreen.disable_saver);
-	WRITE_NL(); WRITE_BOOL(*options, fullscreen.above);
 
 	WRITE_SEPARATOR();
 
@@ -542,14 +530,14 @@ static void write_global_attributes(GString *outstr, gint indent)
 
 	WRITE_NL(); WRITE_INT(*options, image_overlay.x);
 	WRITE_NL(); WRITE_INT(*options, image_overlay.y);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.text_red);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.text_green);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.text_blue);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.text_alpha);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.background_red);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.background_green);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.background_blue);
-	WRITE_NL(); WRITE_INT(*options, image_overlay.background_alpha);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.text_red", options->image_overlay.text_color.r);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.text_green", options->image_overlay.text_color.g);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.text_blue", options->image_overlay.text_color.b);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.text_alpha", options->image_overlay.text_color.a);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.background_red", options->image_overlay.background.r);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.background_green", options->image_overlay.background.g);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.background_blue", options->image_overlay.background.b);
+	WRITE_NL(); WRITE_INT_FULL("image_overlay.background_alpha", options->image_overlay.background.a);
 	WRITE_NL(); WRITE_CHAR(*options, image_overlay.font);
 	WRITE_NL(); WRITE_UINT(*options, overlay_screen_display_selected_profile);
 
@@ -563,6 +551,7 @@ static void write_global_attributes(GString *outstr, gint indent)
 
 	/* Filtering Options */
 	WRITE_NL(); WRITE_BOOL(*options, file_filter.show_hidden_files);
+	WRITE_NL(); WRITE_BOOL(*options, file_filter.dot_prefix_hidden_files);
 	WRITE_NL(); WRITE_BOOL(*options, file_filter.show_parent_directory);
 	WRITE_NL(); WRITE_BOOL(*options, file_filter.show_dot_directory);
 	WRITE_NL(); WRITE_BOOL(*options, file_filter.disable_file_extension_checks);
@@ -575,10 +564,6 @@ static void write_global_attributes(GString *outstr, gint indent)
 	/* Shell command */
 	WRITE_NL(); WRITE_CHAR(*options, shell.path);
 	WRITE_NL(); WRITE_CHAR(*options, shell.options);
-
-	/* Helpers */
-	WRITE_NL(); WRITE_CHAR(*options, helpers.html_browser.command_name);
-	WRITE_NL(); WRITE_CHAR(*options, helpers.html_browser.command_line);
 
 	/* Metadata Options */
 	WRITE_NL(); WRITE_BOOL(*options, metadata.enable_metadata_dirs);
@@ -600,12 +585,12 @@ static void write_global_attributes(GString *outstr, gint indent)
 	WRITE_NL(); WRITE_INT(*options, stereo.mode);
 	WRITE_NL(); WRITE_INT(*options, stereo.fsmode);
 	WRITE_NL(); WRITE_BOOL(*options, stereo.enable_fsmode);
-	WRITE_NL(); WRITE_INT(*options, stereo.fixed_w);
-	WRITE_NL(); WRITE_INT(*options, stereo.fixed_h);
-	WRITE_NL(); WRITE_INT(*options, stereo.fixed_x1);
-	WRITE_NL(); WRITE_INT(*options, stereo.fixed_y1);
-	WRITE_NL(); WRITE_INT(*options, stereo.fixed_x2);
-	WRITE_NL(); WRITE_INT(*options, stereo.fixed_y2);
+	WRITE_NL(); WRITE_INT_FULL("stereo.fixed_w", options->stereo.fixed_size.width);
+	WRITE_NL(); WRITE_INT_FULL("stereo.fixed_h", options->stereo.fixed_size.height);
+	WRITE_NL(); WRITE_INT_FULL("stereo.fixed_x1", options->stereo.fixed_left.x);
+	WRITE_NL(); WRITE_INT_FULL("stereo.fixed_y1", options->stereo.fixed_left.y);
+	WRITE_NL(); WRITE_INT_FULL("stereo.fixed_x2", options->stereo.fixed_right.x);
+	WRITE_NL(); WRITE_INT_FULL("stereo.fixed_y2", options->stereo.fixed_right.y);
 
 	WRITE_NL(); WRITE_BOOL(*options, read_metadata_in_idle);
 
@@ -671,8 +656,8 @@ static void write_color_profile(GString *outstr, gint indent)
 	for (i = 0; i < COLOR_PROFILE_INPUTS; i++)
 		{
 		WRITE_NL(); WRITE_STRING("<profile ");
-		write_char_option(outstr, "input_file", options->color_profile.input_file[i]);
-		write_char_option(outstr, "input_name", options->color_profile.input_name[i]);
+		WRITE_CHAR_FULL("input_file", options->color_profile.input_file[i]);
+		WRITE_CHAR_FULL("input_name", options->color_profile.input_name[i]);
 		WRITE_STRING("/>");
 		}
 	indent--;
@@ -690,18 +675,18 @@ static void write_osd_profiles(GString *outstr, gint indent)
 		{
 		WRITE_NL(); WRITE_STRING("<osd ");
 		indent++;
-		WRITE_NL(); write_char_option(outstr, "template_string", options->image_overlay_n.template_string[i]);
-		WRITE_NL(); write_int_option(outstr, "x", options->image_overlay_n.x[i]);
-		WRITE_NL(); write_int_option(outstr, "y", options->image_overlay_n.y[i]);
-		WRITE_NL(); write_int_option(outstr, "text_red", options->image_overlay_n.text_red[i]);
-		WRITE_NL(); write_int_option(outstr, "text_green", options->image_overlay_n.text_green[i]);
-		WRITE_NL(); write_int_option(outstr, "text_blue", options->image_overlay_n.text_blue[i]);
-		WRITE_NL(); write_int_option(outstr, "text_alpha", options->image_overlay_n.text_alpha[i]);
-		WRITE_NL(); write_int_option(outstr, "background_red", options->image_overlay_n.background_red[i]);
-		WRITE_NL(); write_int_option(outstr, "background_green", options->image_overlay_n.background_green[i]);
-		WRITE_NL(); write_int_option(outstr, "background_blue", options->image_overlay_n.background_blue[i]);
-		WRITE_NL(); write_int_option(outstr, "background_alpha", options->image_overlay_n.background_alpha[i]);
-		WRITE_NL(); write_char_option(outstr, "font", options->image_overlay_n.font[i]);
+		WRITE_NL(); WRITE_CHAR(options->image_overlay_n[i], template_string);
+		WRITE_NL(); WRITE_INT(options->image_overlay_n[i], x);
+		WRITE_NL(); WRITE_INT(options->image_overlay_n[i], y);
+		WRITE_NL(); WRITE_INT_FULL("text_red", options->image_overlay_n[i].text_color.r);
+		WRITE_NL(); WRITE_INT_FULL("text_green", options->image_overlay_n[i].text_color.g);
+		WRITE_NL(); WRITE_INT_FULL("text_blue", options->image_overlay_n[i].text_color.b);
+		WRITE_NL(); WRITE_INT_FULL("text_alpha", options->image_overlay_n[i].text_color.a);
+		WRITE_NL(); WRITE_INT_FULL("background_red", options->image_overlay_n[i].background.r);
+		WRITE_NL(); WRITE_INT_FULL("background_green", options->image_overlay_n[i].background.g);
+		WRITE_NL(); WRITE_INT_FULL("background_blue", options->image_overlay_n[i].background.b);
+		WRITE_NL(); WRITE_INT_FULL("background_alpha", options->image_overlay_n[i].background.a);
+		WRITE_NL(); WRITE_CHAR(options->image_overlay_n[i], font);
 		indent--;
 		WRITE_NL();
 		WRITE_STRING("/>");
@@ -719,8 +704,8 @@ static void write_marks_tooltips(GString *outstr, gint indent)
 	indent++;
 	for (i = 0; i < FILEDATA_MARKS_SIZE; i++)
 		{
-		WRITE_NL();
-		write_char_option(outstr, "<tooltip text", options->marks_tooltips[i]);
+		WRITE_NL(); WRITE_STRING("<tooltip ");
+		WRITE_CHAR_FULL("text", options->marks_tooltips[i]);
 		WRITE_STRING("/>");
 		}
 	indent--;
@@ -736,8 +721,8 @@ static void write_class_filter(GString *outstr, gint indent)
 	for (i = 0; i < FILE_FORMAT_CLASSES; i++)
 		{
 		WRITE_NL(); WRITE_STRING("<filter_type ");
-		write_char_option(outstr, "filter", format_class_list[i]);
-		write_bool_option(outstr, "enabled", options->class_filter[i]);
+		WRITE_CHAR_FULL("filter", format_class_list[i]);
+		WRITE_BOOL_FULL("enabled", options->class_filter[i]);
 		WRITE_STRING("/>");
 		}
 	indent--;
@@ -764,8 +749,8 @@ static void write_disabled_plugins(GString *outstr, gint indent)
 				{
 				g_autofree gchar *desktop_path = nullptr;
 				gtk_tree_model_get(GTK_TREE_MODEL(desktop_file_list), &iter, DESKTOP_FILE_COLUMN_PATH, &desktop_path, -1);
-				WRITE_NL();
-				write_char_option(outstr, "<plugin path", desktop_path);
+				WRITE_NL(); WRITE_STRING("<plugin ");
+				WRITE_CHAR_FULL("path", desktop_path);
 				WRITE_STRING("/>");
 				}
 			valid = gtk_tree_model_iter_next(GTK_TREE_MODEL(desktop_file_list), &iter);
@@ -909,6 +894,7 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		/* General options */
 		if (READ_BOOL(*options, show_icon_names)) continue;
 		if (READ_BOOL(*options, show_star_rating)) continue;
+		if (READ_BOOL(*options, show_collection_infotext)) continue;
 		if (READ_BOOL(*options, show_predefined_keyword_tree)) continue;
 
 		if (READ_BOOL(*options, tree_descend_subdirs)) continue;
@@ -919,7 +905,7 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 
 		if (READ_UINT_CLAMP(*options, duplicates_similarity_threshold, 0, 100)) continue;
 		if (READ_UINT_CLAMP(*options, duplicates_match, 0, DUPE_MATCH_ALL)) continue;
-		if (READ_UINT_CLAMP(*options, duplicates_select_type, 0, DUPE_SELECT_GROUP2)) continue;
+		if (READ_UINT_ENUM_CLAMP(*options, duplicates_select_type, DUPE_SELECT_NONE, DUPE_SELECT_GROUP2)) continue;
 		if (READ_BOOL(*options, duplicates_thumbnails)) continue;
 		if (READ_BOOL(*options, rot_invariant_sim)) continue;
 		if (READ_BOOL(*options, sort_totals)) continue;
@@ -938,7 +924,7 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		if (READ_INT(*options, dnd_icon_size)) continue;
 		if (READ_UINT_ENUM(*options, dnd_default_action)) continue;
 		if (READ_BOOL(*options, place_dialogs_under_mouse)) continue;
-		if (READ_INT(*options, clipboard_selection)) continue;
+		if (READ_INT_ENUM(*options, clipboard_selection)) continue;
 		if (READ_UINT_ENUM(*options, rectangle_draw_aspect_ratio)) continue;
 
 		if (READ_BOOL(*options, save_window_positions)) continue;
@@ -972,9 +958,6 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		if (READ_BOOL(*options, selectable_bars.status_bar)) continue;
 		if (READ_BOOL(*options, selectable_bars.tool_bar)) continue;
 
-		/* Properties dialog options */
-		if (READ_CHAR(*options, properties.tabs_order)) continue;
-
 		if (READ_BOOL(*options, with_rename)) continue;
 
 		/* Image options */
@@ -991,7 +974,7 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		if (READ_UINT_ENUM_CLAMP(*options, image.scroll_reset_method, 0, ScrollReset::COUNT - 1)) continue;
 		if (READ_INT(*options, image.tile_cache_max)) continue;
 		if (READ_INT(*options, image.image_cache_max)) continue;
-		if (READ_UINT_CLAMP(*options, image.zoom_quality, GDK_INTERP_NEAREST, GDK_INTERP_BILINEAR)) continue;
+		if (READ_UINT_ENUM_CLAMP(*options, image.zoom_quality, GDK_INTERP_NEAREST, GDK_INTERP_BILINEAR)) continue;
 		if (READ_INT(*options, image.zoom_increment)) continue;
 		if (READ_BOOL(*options, image.enable_read_ahead)) continue;
 		if (READ_BOOL(*options, image.exif_rotate_enable)) continue;
@@ -1010,7 +993,7 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		if (READ_BOOL(*options, thumbnails.cache_into_dirs)) continue;
 		if (READ_BOOL(*options, thumbnails.use_xvpics)) continue;
 		if (READ_BOOL(*options, thumbnails.spec_standard)) continue;
-		if (READ_UINT_CLAMP(*options, thumbnails.quality, GDK_INTERP_NEAREST, GDK_INTERP_BILINEAR)) continue;
+		if (READ_UINT_ENUM_CLAMP(*options, thumbnails.quality, GDK_INTERP_NEAREST, GDK_INTERP_BILINEAR)) continue;
 		if (READ_BOOL(*options, thumbnails.use_exif)) continue;
 		if (READ_BOOL(*options, thumbnails.use_color_management)) continue;
 		if (READ_INT(*options, thumbnails.collection_preview)) continue;
@@ -1034,20 +1017,19 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		if (READ_INT(*options, fullscreen.screen)) continue;
 		if (READ_BOOL(*options, fullscreen.clean_flip)) continue;
 		if (READ_BOOL(*options, fullscreen.disable_saver)) continue;
-		if (READ_BOOL(*options, fullscreen.above)) continue;
 
 		/* Image overlay */
 		if (READ_CHAR(*options, image_overlay.template_string)) continue;
 		if (READ_INT(*options, image_overlay.x)) continue;
 		if (READ_INT(*options, image_overlay.y)) continue;
-		if (READ_USHORT(*options, image_overlay.text_red)) continue;
-		if (READ_USHORT(*options, image_overlay.text_green)) continue;
-		if (READ_USHORT(*options, image_overlay.text_blue)) continue;
-		if (READ_USHORT(*options, image_overlay.text_alpha)) continue;
-		if (READ_USHORT(*options, image_overlay.background_red)) continue;
-		if (READ_USHORT(*options, image_overlay.background_green)) continue;
-		if (READ_USHORT(*options, image_overlay.background_blue)) continue;
-		if (READ_USHORT(*options, image_overlay.background_alpha)) continue;
+		if (READ_UCHAR_FULL("image_overlay.text_red", options->image_overlay.text_color.r)) continue;
+		if (READ_UCHAR_FULL("image_overlay.text_green", options->image_overlay.text_color.g)) continue;
+		if (READ_UCHAR_FULL("image_overlay.text_blue", options->image_overlay.text_color.b)) continue;
+		if (READ_UCHAR_FULL("image_overlay.text_alpha", options->image_overlay.text_color.a)) continue;
+		if (READ_UCHAR_FULL("image_overlay.background_red", options->image_overlay.background.r)) continue;
+		if (READ_UCHAR_FULL("image_overlay.background_green", options->image_overlay.background.g)) continue;
+		if (READ_UCHAR_FULL("image_overlay.background_blue", options->image_overlay.background.b)) continue;
+		if (READ_UCHAR_FULL("image_overlay.background_alpha", options->image_overlay.background.a)) continue;
 		if (READ_CHAR(*options, image_overlay.font)) continue;
 		if (READ_UINT_ENUM(*options, overlay_screen_display_selected_profile)) continue;
 
@@ -1061,6 +1043,7 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 
 		/* Filtering options */
 		if (READ_BOOL(*options, file_filter.show_hidden_files)) continue;
+		if (READ_BOOL(*options, file_filter.dot_prefix_hidden_files)) continue;
 		if (READ_BOOL(*options, file_filter.show_parent_directory)) continue;
 		if (READ_BOOL(*options, file_filter.show_dot_directory)) continue;
 		if (READ_BOOL(*options, file_filter.disable_file_extension_checks)) continue;
@@ -1072,10 +1055,6 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		/* Shell command */
 		if (READ_CHAR(*options, shell.path)) continue;
 		if (READ_CHAR(*options, shell.options)) continue;
-
-		/* Helpers */
-		if (READ_CHAR(*options, helpers.html_browser.command_name)) continue;
-		if (READ_CHAR(*options, helpers.html_browser.command_line)) continue;
 
 		/* Metadata */
 		if (READ_BOOL(*options, metadata.enable_metadata_dirs)) continue;
@@ -1097,12 +1076,12 @@ static gboolean load_global_params(const gchar **attribute_names, const gchar **
 		if (READ_INT(*options, stereo.mode)) continue;
 		if (READ_INT(*options, stereo.fsmode)) continue;
 		if (READ_BOOL(*options, stereo.enable_fsmode)) continue;
-		if (READ_INT(*options, stereo.fixed_w)) continue;
-		if (READ_INT(*options, stereo.fixed_h)) continue;
-		if (READ_INT(*options, stereo.fixed_x1)) continue;
-		if (READ_INT(*options, stereo.fixed_y1)) continue;
-		if (READ_INT(*options, stereo.fixed_x2)) continue;
-		if (READ_INT(*options, stereo.fixed_y2)) continue;
+		if (READ_INT_FULL("stereo.fixed_w", options->stereo.fixed_size.width)) continue;
+		if (READ_INT_FULL("stereo.fixed_h", options->stereo.fixed_size.height)) continue;
+		if (READ_INT_FULL("stereo.fixed_x1", options->stereo.fixed_left.x)) continue;
+		if (READ_INT_FULL("stereo.fixed_y1", options->stereo.fixed_left.y)) continue;
+		if (READ_INT_FULL("stereo.fixed_x2", options->stereo.fixed_right.x)) continue;
+		if (READ_INT_FULL("stereo.fixed_y2", options->stereo.fixed_right.y)) continue;
 
 		if (READ_BOOL(*options, read_metadata_in_idle)) continue;
 
@@ -1213,10 +1192,10 @@ static void options_load_disabled_plugins(GQParserData *parser_data, const gchar
 		const gchar *option = *attribute_names++;
 		const gchar *value = *attribute_values++;
 
-		gchar *path = nullptr;
-		if (READ_CHAR_FULL("path", path))
+		if (g_autofree gchar *path = nullptr;
+		    READ_CHAR_FULL("path", path) && path)
 			{
-			options->disabled_plugins = g_list_append(options->disabled_plugins, path);
+			options->disabled_plugins.emplace_back(path);
 			continue;
 			}
 
@@ -1275,18 +1254,18 @@ static void options_load_osd_profiles(GQParserData *parser_data, const gchar **a
 		const gchar *option = *attribute_names++;
 		const gchar *value = *attribute_values++;
 
-		if (READ_CHAR_FULL("template_string", options->image_overlay_n.template_string[i])) continue;
-		if (READ_INT_FULL("x", options->image_overlay_n.x[i])) continue;
-		if (READ_INT_FULL("y", options->image_overlay_n.y[i])) continue;
-		if (READ_USHORT_FULL("text_red", options->image_overlay_n.text_red[i])) continue;
-		if (READ_USHORT_FULL("text_green", options->image_overlay_n.text_green[i])) continue;
-		if (READ_USHORT_FULL("text_blue", options->image_overlay_n.text_blue[i])) continue;
-		if (READ_USHORT_FULL("text_alpha", options->image_overlay_n.text_alpha[i])) continue;
-		if (READ_USHORT_FULL("background_red", options->image_overlay_n.background_red[i])) continue;
-		if (READ_USHORT_FULL("background_green", options->image_overlay_n.background_green[i])) continue;
-		if (READ_USHORT_FULL("background_blue", options->image_overlay_n.background_blue[i])) continue;
-		if (READ_USHORT_FULL("background_alpha", options->image_overlay_n.background_alpha[i])) continue;
-		if (READ_CHAR_FULL("font", options->image_overlay_n.font[i])) continue;
+		if (READ_CHAR(options->image_overlay_n[i], template_string)) continue;
+		if (READ_INT(options->image_overlay_n[i], x)) continue;
+		if (READ_INT(options->image_overlay_n[i], y)) continue;
+		if (READ_UCHAR_FULL("text_red", options->image_overlay_n[i].text_color.r)) continue;
+		if (READ_UCHAR_FULL("text_green", options->image_overlay_n[i].text_color.g)) continue;
+		if (READ_UCHAR_FULL("text_blue", options->image_overlay_n[i].text_color.b)) continue;
+		if (READ_UCHAR_FULL("text_alpha", options->image_overlay_n[i].text_color.a)) continue;
+		if (READ_UCHAR_FULL("background_red", options->image_overlay_n[i].background.r)) continue;
+		if (READ_UCHAR_FULL("background_green", options->image_overlay_n[i].background.g)) continue;
+		if (READ_UCHAR_FULL("background_blue", options->image_overlay_n[i].background.b)) continue;
+		if (READ_UCHAR_FULL("background_alpha", options->image_overlay_n[i].background.a)) continue;
+		if (READ_CHAR(options->image_overlay_n[i], font)) continue;
 
 		config_file_error((std::string("Unknown attribute: ") + option + " = " + value).c_str());
 		}
@@ -1659,39 +1638,22 @@ static void options_parse_bar(GQParserData *parser_data, const gchar *element_na
 		}
 }
 
+template<ToolbarType type>
 static void options_parse_toolbar(GQParserData *parser_data, const gchar *element_name, const gchar **attribute_names, const gchar **attribute_values, gpointer data)
 {
 	auto lw = static_cast<LayoutWindow *>(data);
 	if (g_ascii_strcasecmp(element_name, "toolitem") == 0)
 		{
-		layout_toolbar_add_from_config(lw, TOOLBAR_MAIN, attribute_names, attribute_values);
+		layout_toolbar_add_from_config(lw, type, attribute_names, attribute_values);
 		}
 	else if (g_ascii_strcasecmp(element_name, "clear") == 0)
 		{
-		layout_toolbar_clear(lw, TOOLBAR_MAIN);
+		layout_toolbar_clear(lw, type);
 		}
 	else
 		{
-		config_file_error((std::string("Unexpected in <toolbar>: ") + element_name).c_str());
-		}
-
-	parser_data->func_push(options_parse_leaf, nullptr, nullptr);
-}
-
-static void options_parse_statusbar(GQParserData *parser_data, const gchar *element_name, const gchar **attribute_names, const gchar **attribute_values, gpointer data)
-{
-	auto lw = static_cast<LayoutWindow *>(data);
-	if (g_ascii_strcasecmp(element_name, "toolitem") == 0)
-		{
-		layout_toolbar_add_from_config(lw, TOOLBAR_STATUS, attribute_names, attribute_values);
-		}
-	else if (g_ascii_strcasecmp(element_name, "clear") == 0)
-		{
-		layout_toolbar_clear(lw, TOOLBAR_STATUS);
-		}
-	else
-		{
-		config_file_error((std::string("Unexpected in <statusbar>: ") + element_name).c_str());
+		g_autofree gchar *message = g_strdup_printf("Unexpected in <%s>: %s", toolbar_type_config_name(type), element_name);
+		config_file_error(message);
 		}
 
 	parser_data->func_push(options_parse_leaf, nullptr, nullptr);
@@ -1744,11 +1706,11 @@ static void options_parse_layout(GQParserData *parser_data, const gchar *element
 		}
 	else if (g_ascii_strcasecmp(element_name, "toolbar") == 0)
 		{
-		parser_data->func_push(options_parse_toolbar, nullptr, lw);
+		parser_data->func_push(options_parse_toolbar<TOOLBAR_MAIN>, nullptr, lw);
 		}
 	else if (g_ascii_strcasecmp(element_name, "statusbar") == 0)
 		{
-		parser_data->func_push(options_parse_statusbar, nullptr, lw);
+		parser_data->func_push(options_parse_toolbar<TOOLBAR_STATUS>, nullptr, lw);
 		}
 	else if (g_ascii_strcasecmp(element_name, "dialogs") == 0)
 		{
@@ -1824,12 +1786,11 @@ static void start_element(GMarkupParseContext *,
 }
 
 static void end_element(GMarkupParseContext *,
-                        const gchar *element_name,
+                        [[maybe_unused]] const gchar *element_name,
                         gpointer user_data,
                         GError **)
 {
 	auto parser_data = static_cast<GQParserData *>(user_data);
-	(void)element_name; // @todo Use [[maybe_unused]] since C++17
 	DEBUG_2("end %s", element_name);
 
 	parser_data->end_func();

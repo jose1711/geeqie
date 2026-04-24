@@ -66,8 +66,13 @@ struct CollectTable
 
 	gboolean show_text;
 	gboolean show_stars;
+	gboolean show_infotext;
 
 	GList *editmenu_fd_list; /**< file list for edit menu */
+
+	gint last_x;
+	gint last_y;
+	gboolean pointer_valid;
 };
 
 void collection_table_select_all(CollectTable *ct);

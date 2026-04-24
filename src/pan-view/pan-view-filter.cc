@@ -83,17 +83,16 @@ void pan_filter_kw_button_cb(GtkButton *widget, gpointer data)
 	PanViewFilterUi *ui = pw->filter_ui;
 
 	ui->filter_elements = g_list_remove_link(ui->filter_elements, cb_state->filter_element);
-	gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(GTK_WIDGET(widget))), GTK_WIDGET(widget));
+	widget_remove_from_parent(GTK_WIDGET(widget));
 	pan_filter_callback_state_free(cb_state);
 
 	gtk_label_set_text(GTK_LABEL(pw->filter_ui->filter_label), _("Removed keyword…"));
 	pan_layout_update(pw);
 }
 
-void pan_filter_activate_cb(const gchar *text, gpointer data)
+void pan_filter_activate_cb(PanWindow *pw, const gchar *text)
 {
 	GtkWidget *kw_button;
-	auto pw = static_cast<PanWindow *>(data);
 	PanViewFilterUi *ui = pw->filter_ui;
 	GtkTreeIter iter;
 
@@ -219,7 +218,6 @@ gchar *pan_view_list_find_kw_pattern(GList *haystack, const PanViewFilterElement
 PanViewFilterUi *pan_filter_ui_new(PanWindow *pw)
 {
 	auto ui = g_new0(PanViewFilterUi, 1);
-	GtkWidget *combo;
 	GtkWidget *hbox;
 
 	/* Since we're using the GHashTable as a HashSet (in which key and value pointers
@@ -263,10 +261,9 @@ PanViewFilterUi *pan_filter_ui_new(PanWindow *pw)
 	gq_gtk_box_pack_start(GTK_BOX(ui->filter_box), hbox, TRUE, TRUE, 0);
 	gtk_widget_show(hbox);
 
-	combo = tab_completion_new_with_history(&ui->filter_entry, "", "pan_view_filter", -1,
-						pan_filter_activate_cb, pw);
-	gq_gtk_box_pack_start(GTK_BOX(hbox), combo, TRUE, TRUE, 0);
-	gtk_widget_show(combo);
+	ui->filter_entry = tab_completion_new_with_history(hbox, "", "pan_view_filter", -1);
+	tab_completion_set_enter_func(ui->filter_entry,
+	                              [pw](const gchar *text){ pan_filter_activate_cb(pw, text); });
 
 	ui->filter_label = gtk_label_new("");/** @todo (xsdg): Figure out whether it's useful to keep this label around. */
 
@@ -279,7 +276,7 @@ PanViewFilterUi *pan_filter_ui_new(PanWindow *pw)
 	gtk_button_set_relief(GTK_BUTTON(ui->filter_button), GTK_RELIEF_NONE);
 	gtk_widget_set_focus_on_click(ui->filter_button, FALSE);
 	hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, PREF_PAD_GAP);
-	gq_gtk_container_add(GTK_WIDGET(ui->filter_button), hbox);
+	gq_gtk_container_add(ui->filter_button, hbox);
 	gtk_widget_show(hbox);
 	ui->filter_button_arrow = gtk_image_new_from_icon_name(GQ_ICON_PAN_UP, GTK_ICON_SIZE_BUTTON);
 	gq_gtk_box_pack_start(GTK_BOX(hbox), ui->filter_button_arrow, FALSE, FALSE, 0);
@@ -317,19 +314,16 @@ void pan_filter_ui_destroy(PanViewFilterUi *ui)
 	g_free(ui);
 }
 
-gboolean pan_filter_fd_list(GList **fd_list, GList *filter_elements, gint filter_classes)
+GList *pan_filter_fd_list(GList *fd_list, const PanViewFilterUi *ui)
 {
-	GList *work;
-	gboolean modified = FALSE;
-	GHashTable *seen_kw_table = nullptr;
-
-	if (!fd_list || !*fd_list) return modified;
+	if (!fd_list) return nullptr;
 
 	// seen_kw_table is only valid in this scope, so don't take ownership of any strings.
-	if (filter_elements)
+	g_autoptr(GHashTable) seen_kw_table = nullptr;
+	if (ui->filter_elements)
 		seen_kw_table = g_hash_table_new_full(g_str_hash, g_str_equal, nullptr, nullptr);
 
-	work = *fd_list;
+	GList *work = fd_list;
 	while (work)
 		{
 		auto fd = static_cast<FileData *>(work->data);
@@ -338,18 +332,18 @@ gboolean pan_filter_fd_list(GList **fd_list, GList *filter_elements, gint filter
 
 		gboolean should_reject = FALSE;
 
-		if (!((1 << fd -> format_class) & filter_classes))
+		if (!((1 << fd -> format_class) & ui->filter_classes))
 			{
 			should_reject = TRUE;
 			}
-		else if (filter_elements)
+		else if (ui->filter_elements)
 			{
 			/** @todo (xsdg): OPTIMIZATION Do the search inside of metadata.cc to avoid a bunch of string list copies. */
 			GList *img_keywords = metadata_read_list(fd, KEYWORD_KEY, METADATA_PLAIN);
 			gchar *group_kw = nullptr; // group_kw references an item from img_keywords.
 
 			/** @todo (xsdg): OPTIMIZATION Determine a heuristic for when to linear-search the keywords list, and when to build a hash table for the image's keywords. */
-			GList *filter_element = filter_elements;
+			GList *filter_element = ui->filter_elements;
 
 			while (filter_element)
 				{
@@ -392,13 +386,9 @@ gboolean pan_filter_fd_list(GList **fd_list, GList *filter_elements, gint filter
 
 		if (should_reject)
 			{
-			*fd_list = g_list_delete_link(*fd_list, last_work);
-			modified = TRUE;
+			fd_list = g_list_delete_link(fd_list, last_work);
 			}
 		}
 
-	if (filter_elements)
-		g_hash_table_destroy(seen_kw_table);
-
-	return modified;
+	return fd_list;
 }

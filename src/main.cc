@@ -24,6 +24,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
 #include <clocale>
 #include <csignal>
@@ -52,10 +53,6 @@
 #  include <libintl.h>
 #endif
 
-#if HAVE_DEVELOPER
-#include "third-party/backward.h"
-#endif
-
 #include "cache-maint.h"
 #include "cache.h"
 #include "collect-io.h"
@@ -65,7 +62,9 @@
 #include "exif.h"
 #include "filedata.h"
 #include "filefilter.h"
-#include "glua.h"
+#if HAVE_LUA
+#  include "glua.h"
+#endif
 #include "histogram.h"
 #include "history-list.h"
 #include "image.h"
@@ -81,6 +80,7 @@
 #include "pixbuf-util.h"
 #include "third-party/whereami.h"
 #include "thumb.h"
+#include "ui-bookmark.h"
 #include "ui-fileops.h"
 #include "ui-utildlg.h"
 
@@ -119,15 +119,17 @@ XDG_CONFIG_HOME=/tmp/a XDG_CACHE_HOME=/tmp/b GQ_NEW_INSTANCE=y geeqie\n\n \
 To disable Clutter use:\n \
 GQ_DISABLE_CLUTTER=y[es] geeqie\n\n \
 To run or stop Geeqie in cache maintenance (non-GUI) mode use:\n \
-GQ_CACHE_MAINTENANCE=y[es] geeqie --help\n\n \
+GQ_CACHE_MAINTENANCE=y[es] geeqie --help\n \
+Note that bash command line completion does not work in this mode.\n\n \
 User manual: https://www.geeqie.org/help/GuideIndex.html\n \
            : https://www.geeqie.org/help-pdf/help.pdf");
 
 const gchar *option_context_description_cache_maintenance = _(" \
 This is a command line program that will recursively remove orphaned thumbnails and\n \
-.sim files, and create thumbnails and similarity data for all images found under FOLDER.\n \
+.sim files, and create thumbnails and similarity data for all images found under FOLDER.\n\n \
 It may also be called from cron or anacron thus enabling automatic updating of the cached\n \
 data for all your images.\n\n \
+Note that bash command line completion does not work in this mode.\n\n \
 User manual: https://www.geeqie.org/help/GuideIndex.html\n \
            : https://www.geeqie.org/help-pdf/help.pdf");
 
@@ -146,7 +148,10 @@ GOptionEntry command_line_options[] =
 	{ "close-window"              ,   0, G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE  , nullptr, _("close window")                                                                , nullptr },
 	{ "config-load"               ,   0, G_OPTION_FLAG_NONE, G_OPTION_ARG_STRING, nullptr, _("load configuration from FILE")                                                , "<FILE>" },
 #ifdef DEBUG
-	{ "debug"                     ,   0, G_OPTION_FLAG_NONE, G_OPTION_ARG_INT   , nullptr, _("turn on debug output")                                                        , "[level]" },
+/* G_OPTION_ARG_STRING and not G_OPTION_ARG_INT is required because of
+ * the way an integer zero is handled (the parameter is not passed on).
+ */
+	{ "debug"                     ,   0, G_OPTION_FLAG_NONE, G_OPTION_ARG_STRING, nullptr, _("debug output: 0 none, 1 to 4 increasing level of verbosity")                  , "0|1|2|3|4" },
 #endif
 	{ "delay"                     , 'd', G_OPTION_FLAG_NONE, G_OPTION_ARG_STRING, nullptr, _("set slide show delay to Hrs Mins N.M seconds,")                               , "<[H:][M:][N][.M]>" },
 	{ "dupes"                     ,   0, G_OPTION_FLAG_NONE, G_OPTION_ARG_STRING, nullptr, _("find duplicates in folder")                                                   , "<FOLDER>" },
@@ -202,131 +207,72 @@ GOptionEntry command_line_options_cache_maintenance[] =
 	{ nullptr            ,   0, G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE  , nullptr, nullptr                                             , nullptr },
 };
 
-#if !HAVE_DEVELOPER
-#if defined(SA_SIGINFO)
-void sig_handler_cb(int signo, siginfo_t *info, void *)
+const gchar *get_signal_name(int signo)
 {
-	gchar hex_char[16];
-	const gchar *signal_name = nullptr;
-	gint i = 0;
-	guint64 addr;
-	guint64 char_index;
-	ssize_t len;
-#if HAVE_EXECINFO_H
-	gint bt_size;
-	void *bt[1024];
-#endif
-	struct signals
-		{
+	static const struct signals
+	{
 		gint sig_no;
 		const gchar *sig_name;
-		};
-	struct signals signals_list[7];
+	} signals_list[6] = {
+		{ SIGABRT, "Abort" },
+		{ SIGBUS, "Bus error" },
+		{ SIGFPE, "Floating-point exception" },
+		{ SIGILL, "Illegal instruction" },
+		{ SIGIOT, "IOT trap" }, // @todo Same value as SIGABRT. Remove SIGIOT?
+		{ SIGSEGV, "Invalid memory reference" },
+	};
+	const auto it = std::find_if(std::cbegin(signals_list), std::cend(signals_list),
+	                             [signo](const signals &s){ return s.sig_no == signo; });
+	return (it != std::cend(signals_list)) ? it->sig_name : "Unknown signal";
+}
 
-	signals_list[0].sig_no = SIGABRT;
-	signals_list[0].sig_name = "Abort";
-	signals_list[1].sig_no = SIGBUS;
-	signals_list[1].sig_name = "Bus error";
-	signals_list[2].sig_no = SIGFPE;
-	signals_list[2].sig_name = "Floating-point exception";
-	signals_list[3].sig_no = SIGILL;
-	signals_list[3].sig_name = "Illegal instruction";
-	signals_list[4].sig_no = SIGIOT;
-	signals_list[4].sig_name = "IOT trap";
-	signals_list[5].sig_no = SIGSEGV;
-	signals_list[5].sig_name = "Invalid memory reference";
-	signals_list[6].sig_no = -1;
-	signals_list[6].sig_name = "END";
+void sig_handler_cb(int signo, siginfo_t *info, void *)
+{
+	[[maybe_unused]] ssize_t len = write(STDERR_FILENO, "Geeqie fatal error\n", 19);
 
-	hex_char[0] = '0';
-	hex_char[1] = '1';
-	hex_char[2] = '2';
-	hex_char[3] = '3';
-	hex_char[4] = '4';
-	hex_char[5] = '5';
-	hex_char[6] = '6';
-	hex_char[7] = '7';
-	hex_char[8] = '8';
-	hex_char[9] = '9';
-	hex_char[10] = 'a';
-	hex_char[11] = 'b';
-	hex_char[12] = 'c';
-	hex_char[13] = 'd';
-	hex_char[14] = 'e';
-	hex_char[15] = 'f';
-
-	signal_name = "Unknown signal";
-	while (signals_list[i].sig_no != -1)
-		{
-		if (signo == signals_list[i].sig_no)
-			{
-			signal_name = signals_list[i].sig_name;
-			break;
-			}
-		i++;
-		}
-
-	len = write(STDERR_FILENO, "Geeqie fatal error\n", 19);
+	const gchar *signal_name = get_signal_name(signo);
 	len = write(STDERR_FILENO, "Signal: ", 8);
 	len = write(STDERR_FILENO, signal_name, strlen(signal_name));
 	len = write(STDERR_FILENO, "\n", 1);
 
+	const gchar *code_descr = (info->si_code == SEGV_MAPERR) ? "Address not mapped" : "Invalid permissions";
 	len = write(STDERR_FILENO, "Code: ", 6);
-	len = write(STDERR_FILENO,  (info->si_code == SEGV_MAPERR) ? "Address not mapped" : "Invalid permissions", strlen((info->si_code == SEGV_MAPERR) ? "Address not mapped" : "Invalid permissions"));
+	len = write(STDERR_FILENO, code_descr, strlen(code_descr));
 	len = write(STDERR_FILENO, "\n", 1);
 
-	len = write(STDERR_FILENO, "Address: ", 9);
-
+	len = write(STDERR_FILENO, "Address: 0x", 11);
 	if (info->si_addr == nullptr)
 		{
-		len = write(STDERR_FILENO, "0x0\n", 4);
+		len = write(STDERR_FILENO, "0", 1);
 		}
 	else
 		{
 		/* Assume the address is 64-bit */
-		len = write(STDERR_FILENO, "0x", 2);
-		addr = reinterpret_cast<guint64>(info->si_addr);
+		const gchar hex_char[16] = { '0', '1', '2', '3', '4', '5', '6', '7',
+		                             '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+		auto addr = reinterpret_cast<guint64>(info->si_addr);
 
-		for (i = 0; i < 16; i++)
+		for (gint i = 0; i < 16; i++)
 			{
-			char_index = addr & 0xf000000000000000;
+			guint64 char_index = addr & 0xf000000000000000;
 			char_index = char_index >> 60;
 			addr = addr << 4;
 
 			len = write(STDERR_FILENO, &hex_char[char_index], 1);
 			}
-		len = write(STDERR_FILENO, "\n", 1);
 		}
+	len = write(STDERR_FILENO, "\n", 1);
 
 #if HAVE_EXECINFO_H
-	bt_size = backtrace(bt, 1024);
-	backtrace_symbols_fd(bt, bt_size, STDERR_FILENO);
-#endif
-
-	(void)len; // @todo Use [[maybe_unused]] since C++17
-
-	exit(EXIT_FAILURE);
-}
-#else /* defined(SA_SIGINFO) */
-void sig_handler_cb(int)
-{
-#if HAVE_EXECINFO_H
-	gint bt_size;
 	void *bt[1024];
-#endif
-
-	write(STDERR_FILENO, "Geeqie fatal error\n", 19);
-	write(STDERR_FILENO, "Signal: Segmentation fault\n", 27);
-
-#if HAVE_EXECINFO_H
-	bt_size = backtrace(bt, 1024);
+	const int bt_size = backtrace(bt, 1024);
 	backtrace_symbols_fd(bt, bt_size, STDERR_FILENO);
 #endif
 
+	BACKTRACE(DEBUG);
+
 	exit(EXIT_FAILURE);
 }
-#endif /* defined(SA_SIGINFO) */
-#endif /* !HAVE_DEVELOPER */
 
 gboolean search_command_line_for_option(const gint argc, const gchar* const argv[], const gchar* option_name)
 {
@@ -578,6 +524,10 @@ void exit_program_final()
 		g_object_unref(archive_file);
 		}
 
+	#ifdef FD_VERBOSE_DEBUG
+	DEBUG_FD();  // Comment to disable debug check (see debug_check.sh)
+	#endif
+
 	exit(EXIT_SUCCESS);
 }
 
@@ -643,7 +593,7 @@ gint exit_confirm_dlg()
 	return TRUE;
 }
 
-void exit_program_write_metadata_cb(gint success, const gchar *, gpointer)
+void exit_program_write_metadata_cb(gint success, const gchar *)
 {
 	if (success) exit_program();
 }
@@ -663,10 +613,8 @@ void exit_program_write_metadata_cb(gint success, const gchar *, gpointer)
 /** @FIXME this probably needs some better ifdefs. Please report any compilation problems */
 /** @FIXME This section needs revising */
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
 #if defined(SIGBUS) && defined(SA_SIGINFO)
-void sigbus_handler_cb_unused(int, siginfo_t *info, void *)
+[[maybe_unused]] void sigbus_handler_cb(int, [[maybe_unused]] siginfo_t *info, void *)
 {
 	/*
 	 * @FIXME Design and implement a POSIX-acceptable approach,
@@ -674,15 +622,11 @@ void sigbus_handler_cb_unused(int, siginfo_t *info, void *)
 	 * See https://github.com/BestImageViewer/geeqie/issues/1052 for discussion
 	 */
 
-	(void)info; // @todo Use [[maybe_unused]] since C++17
 	DEBUG_1("SIGBUS %p NOT HANDLED", info->si_addr);
 	exit(EXIT_FAILURE);
 }
 #endif
 
-#pragma GCC diagnostic pop
-
-#if !HAVE_DEVELOPER
 void setup_sig_handler()
 {
 	struct sigaction sigsegv_action;
@@ -697,7 +641,6 @@ void setup_sig_handler()
 	sigaction(SIGIOT, &sigsegv_action, nullptr);
 	sigaction(SIGSEGV, &sigsegv_action, nullptr);
 }
-#endif
 
 void set_theme_bg_color()
 {
@@ -710,7 +653,7 @@ void set_theme_bg_color()
 		LayoutWindow *lw = layout_window_first();
 
 		style_context = gtk_widget_get_style_context(lw->window);
-		gq_gtk_style_context_get_background_color(style_context, GTK_STATE_FLAG_NORMAL, &bg_color);
+		deprecated_gtk_style_context_get_background_color(style_context, GTK_STATE_FLAG_NORMAL, &bg_color);
 
 		theme_color.red = bg_color.red  ;
 		theme_color.green = bg_color.green  ;
@@ -718,18 +661,22 @@ void set_theme_bg_color()
 
 		layout_window_foreach([&theme_color](LayoutWindow *lw)
 		{
-			image_background_set_color(lw->image, &theme_color);
+			image_background_set_color(lw->image, theme_color);
 		});
 		}
 
 	view_window_colors_update();
 }
 
-gboolean theme_change_cb(GObject *, GParamSpec *, gpointer)
+void theme_change_cb(GSettings *iface, gchar, gpointer)
 {
 	set_theme_bg_color();
 
-	return FALSE;
+	g_autofree gchar *scheme = g_settings_get_string(iface, "color-scheme");
+	const gboolean prefer_dark_theme = (g_strcmp0(scheme, "prefer-dark") == 0);
+
+	GtkSettings *settings = gtk_settings_get_default();
+	g_object_set(settings, "gtk-application-prefer-dark-theme", prefer_dark_theme, nullptr);
 }
 
 /**
@@ -778,23 +725,10 @@ gint shutdown_cache_maintenance_cb(GtkApplication *, gpointer)
 	exit(EXIT_SUCCESS);
 }
 
-gint command_line_cache_maintenance_cb(GtkApplication *app, GApplicationCommandLine *app_command_line, gpointer)
-{
-	gint ret;
-
-	ret = process_command_line_cache_maintenance(app, app_command_line, nullptr);
-
-	return ret;
-}
-
 void startup_common(GtkApplication *, gpointer)
 {
 	/* seg. fault handler */
-#if HAVE_DEVELOPER
-	backward::SignalHandling sh {};
-#else
 	setup_sig_handler();
-#endif
 
 	/* init execution time counter (debug only) */
 	init_exec_time();
@@ -850,6 +784,7 @@ void startup_common(GtkApplication *, gpointer)
 	DEBUG_1("%s main: setting default options before commandline handling", get_exec_time());
 	options = init_options(nullptr);
 	setup_default_options(options);
+	bookmark_setup_default();
 	/* Generate a unique identifier used by the open archive function */
 	instance_identifier = g_strdup_printf("%x", g_random_int());
 
@@ -904,8 +839,6 @@ void activate_cb(GtkApplication *, gpointer)
 
 void startup_cb(GtkApplication *app, gpointer)
 {
-	GtkSettings *default_settings;
-
 	startup_common(app, nullptr);
 
 	const gchar *gq_disable_clutter = g_getenv("GQ_DISABLE_CLUTTER");
@@ -927,18 +860,11 @@ void startup_cb(GtkApplication *app, gpointer)
 	/* If this is the first run with multiple OSD tabs, fill OSD_1 with the user's last setting.
 	 * If the user has intentionally set OSD_1 template to null, that will cause a problem...
 	 */
-	if (options->image_overlay_n.template_string[0] == nullptr)
+	if (options->image_overlay_n[0].template_string == nullptr)
 		{
-		options->image_overlay_n.template_string[0] = g_strdup(options->image_overlay.template_string);
-		options->image_overlay_n.font[0] = g_strdup(options->image_overlay.font);
-		options->image_overlay_n.text_red[0] = options->image_overlay.text_red;
-		options->image_overlay_n.text_green[0] = options->image_overlay.text_green;
-		options->image_overlay_n.text_blue[0] = options->image_overlay.text_blue;
-		options->image_overlay_n.text_alpha[0] = options->image_overlay.text_alpha;
-		options->image_overlay_n.background_red[0] = options->image_overlay.background_red;
-		options->image_overlay_n.background_green[0] = options->image_overlay.background_green;
-		options->image_overlay_n.background_blue[0] = options->image_overlay.background_blue;
-		options->image_overlay_n.background_alpha[0] = options->image_overlay.background_alpha;
+		options->image_overlay_n[0] = options->image_overlay;
+		options->image_overlay_n[0].template_string = g_strdup(options->image_overlay.template_string);
+		options->image_overlay_n[0].font = g_strdup(options->image_overlay.font);
 		}
 
 #if HAVE_CLUTTER
@@ -969,9 +895,9 @@ void startup_cb(GtkApplication *app, gpointer)
 
 	marks_load();
 
-	default_settings = gtk_settings_get_default();
+	GSettings *iface = g_settings_new("org.gnome.desktop.interface");
+	g_signal_connect(iface, "changed::color-scheme", G_CALLBACK(theme_change_cb), nullptr);
 
-	g_signal_connect(default_settings, "notify::gtk-theme-name", G_CALLBACK(theme_change_cb), nullptr);
 	set_theme_bg_color();
 
 	/* Show a notification if the server has a newer AppImage version */
@@ -1004,7 +930,7 @@ void exit_program()
 {
 	layout_image_full_screen_stop(nullptr);
 
-	if (metadata_write_queue_confirm(FALSE, exit_program_write_metadata_cb, nullptr)) return;
+	if (metadata_write_queue_confirm(FALSE, exit_program_write_metadata_cb)) return;
 
 	marks_save(options->marks_save);
 
@@ -1067,7 +993,7 @@ Version: Geeqie "), VERSION, nullptr);
 		g_application_set_option_context_description (G_APPLICATION(app),option_context_description_cache_maintenance);
 
 		g_signal_connect(app, "startup", G_CALLBACK(startup_cache_maintenance_cb), nullptr);
-		g_signal_connect(app, "command-line", G_CALLBACK(command_line_cache_maintenance_cb), nullptr);
+		g_signal_connect(app, "command-line", G_CALLBACK(process_command_line_cache_maintenance), nullptr);
 		g_signal_connect(app, "shutdown", G_CALLBACK(shutdown_cache_maintenance_cb), nullptr);
 
 		/* The quit action is linked to the Quit button on the notifications */
@@ -1094,7 +1020,7 @@ Version: Geeqie "), VERSION, nullptr);
 
 	g_application_add_main_option_entries(G_APPLICATION(app), command_line_options);
 
-	g_application_set_option_context_parameter_string (G_APPLICATION(app), "[path...]");
+	g_application_set_option_context_parameter_string (G_APPLICATION(app), "[path…]");
 
 	g_autofree gchar *version_string = g_strconcat(
 _("Geeqie is an image viewer.\n \

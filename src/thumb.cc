@@ -124,7 +124,7 @@ static void thumb_loader_done_cb(ImageLoader *il, gpointer data)
 	pixbuf = image_loader_get_pixbuf(tl->il);
 	if (!pixbuf)
 		{
-		DEBUG_1("...but no pixbuf: %s", tl->fd->path);
+		DEBUG_1("… but no pixbuf: %s", tl->fd->path);
 		thumb_loader_error_cb(tl->il, tl);
 		return;
 		}
@@ -139,7 +139,7 @@ static void thumb_loader_done_cb(ImageLoader *il, gpointer data)
 		{
 		if (!tl->fd->exif_orientation)
 			{
-			if (g_strcmp0(il->fd->format_name, "heif") != 0)
+			if (il->fd->supports_exif_orientation())
 				{
 				tl->fd->exif_orientation = metadata_read_int(tl->fd, ORIENTATION_KEY, EXIF_ORIENTATION_TOP_LEFT);
 				}
@@ -191,7 +191,7 @@ static void thumb_loader_done_cb(ImageLoader *il, gpointer data)
 			pixbuf_scale_aspect(tl->max_w, tl->max_h, pw, ph, w, h);
 
 			if (tl->fd->thumb_pixbuf) g_object_unref(tl->fd->thumb_pixbuf);
-			tl->fd->thumb_pixbuf = gdk_pixbuf_scale_simple(pixbuf, w, h, static_cast<GdkInterpType>(options->thumbnails.quality));
+			tl->fd->thumb_pixbuf = gdk_pixbuf_scale_simple(pixbuf, w, h, options->thumbnails.quality);
 			}
 		save = TRUE;
 		}
@@ -200,9 +200,7 @@ static void thumb_loader_done_cb(ImageLoader *il, gpointer data)
 		if (tl->fd)
 			{
 			if (tl->fd->thumb_pixbuf) g_object_unref(tl->fd->thumb_pixbuf);
-			tl->fd->thumb_pixbuf = pixbuf;
-
-			g_object_ref(tl->fd->thumb_pixbuf);
+			tl->fd->thumb_pixbuf = g_object_ref(pixbuf);
 			}
 		save = image_loader_get_shrunk(il);
 		}
@@ -408,8 +406,7 @@ GdkPixbuf *thumb_loader_get_pixbuf(ThumbLoader *tl)
 
 	if (tl && tl->fd && tl->fd->thumb_pixbuf)
 		{
-		pixbuf = tl->fd->thumb_pixbuf;
-		g_object_ref(pixbuf);
+		pixbuf = g_object_ref(tl->fd->thumb_pixbuf);
 		}
 	else
 		{
@@ -524,11 +521,6 @@ static guchar *load_xv_thumbnail(gchar *filename, gint *widthp, gint *heightp)
 }
 #undef XV_BUFFER
 
-static void free_rgb_buffer(guchar *pixels, gpointer)
-{
-	g_free(pixels);
-}
-
 static GdkPixbuf *get_xv_thumbnail(gchar *thumb_filename, gint max_w, gint max_h)
 {
 	gint width;
@@ -554,7 +546,7 @@ static GdkPixbuf *get_xv_thumbnail(gchar *thumb_filename, gint max_w, gint max_h
 		}
 
 	pixbuf = gdk_pixbuf_new_from_data(rgb_data, GDK_COLORSPACE_RGB, FALSE, 8,
-	                                  width, height, 3 * width, free_rgb_buffer, nullptr);
+	                                  width, height, 3 * width, free_pixels, nullptr);
 
 	if (pixbuf_scale_aspect(width, height, max_w, max_h, width, height))
 		{

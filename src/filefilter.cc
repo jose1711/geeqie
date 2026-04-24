@@ -28,6 +28,8 @@
 #include <config.h>
 
 #include "cache.h"
+#include "filedata.h"
+#include "intl.h"
 #include "main-defines.h"
 #include "options.h"
 #include "rcfile.h"
@@ -39,19 +41,22 @@
  *-----------------------------------------------------------------------------
  */
 
-static GList *filter_list = nullptr;
-static GList *extension_list = nullptr;
-static GList *sidecar_ext_list = nullptr;
+namespace
+{
 
-static GList *file_class_extension_list[FILE_FORMAT_CLASSES];
+GList *filter_list = nullptr;
+GList *extension_list = nullptr;
+GList *sidecar_ext_list = nullptr;
 
-static GList *file_writable_list = nullptr; /* writable files */
-static GList *file_sidecar_list = nullptr; /* files with allowed sidecar */
+GList *file_class_extension_list[FILE_FORMAT_CLASSES];
+
+GList *file_writable_list = nullptr; /* writable files */
+GList *file_sidecar_list = nullptr; /* files with allowed sidecar */
 
 
-static FilterEntry *filter_entry_new(const gchar *key, const gchar *description,
-				     const gchar *extensions, FileFormatClass file_class,
-				     gboolean writable, gboolean allow_sidecar, gboolean enabled)
+FilterEntry *filter_entry_new(const gchar *key, const gchar *description,
+                              const gchar *extensions, FileFormatClass file_class,
+                              gboolean writable, gboolean allow_sidecar, gboolean enabled)
 {
 	FilterEntry *fe;
 
@@ -67,7 +72,7 @@ static FilterEntry *filter_entry_new(const gchar *key, const gchar *description,
 	return fe;
 }
 
-static void filter_entry_free(FilterEntry *fe)
+void filter_entry_free(FilterEntry *fe)
 {
 	if (!fe) return;
 
@@ -76,6 +81,29 @@ static void filter_entry_free(FilterEntry *fe)
 	g_free(fe->extensions);
 	g_free(fe);
 }
+
+} // namespace
+
+const gchar *format_class_list[] = {
+	N_("Unknown"),
+	N_("Image"),
+	N_("RAW Image"),
+	N_("Metadata"),
+	N_("Video"),
+	N_("Collection"),
+	N_("Document"),
+	N_("Archive"),
+};
+
+const gchar *format_rating_list[] = {
+	N_("Rejected"),
+	N_("Unrated"),
+	N_("1"),
+	N_("2"),
+	N_("3"),
+	N_("4"),
+	N_("5"),
+};
 
 GList *filter_get_list()
 {
@@ -262,7 +290,7 @@ void filter_add_defaults()
 	filter_add_if_missing("raf", "Fujifilm raw format", ".raf", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
 	filter_add_if_missing("mef", "Mamiya raw format", ".mef;.mos", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
 	filter_add_if_missing("mrw", "Minolta raw format", ".mrw", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
-	filter_add_if_missing("nef", "Nikon raw format", ".nef", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
+	filter_add_if_missing("nef", "Nikon raw format", ".nef;.nrw", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
 	filter_add_if_missing("orf", "Olympus raw format", ".orf", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
 	filter_add_if_missing("pef", "Pentax or Samsung raw format", ".pef", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
 	filter_add_if_missing("dng", "Adobe Digital Negative raw format", ".dng", FORMAT_CLASS_RAWIMAGE, FALSE, TRUE, TRUE);
@@ -335,9 +363,7 @@ static gint filter_sort_ext_len_cb(gconstpointer a, gconstpointer b)
 	gint len_a = strlen(sa);
 	gint len_b = strlen(sb);
 
-	if (len_a > len_b) return -1;
-	if (len_a < len_b) return 1;
-	return 0;
+	return len_b - len_a;
 }
 
 
@@ -462,6 +488,49 @@ FileFormatClass filter_file_get_class(const gchar *name)
 	if (filter_file_class(name, FORMAT_CLASS_DOCUMENT)) return FORMAT_CLASS_DOCUMENT;
 	if (filter_file_class(name, FORMAT_CLASS_ARCHIVE)) return FORMAT_CLASS_ARCHIVE;
 	return FORMAT_CLASS_UNKNOWN;
+}
+
+FileFormatRating filter_file_get_rating(FileData *fd)
+{
+	FileFormatRating ret = FORMAT_RATING_UNRATED;
+
+	if (fd)
+		{
+		/* If rating metadata not yet read */
+		if (fd->rating == -12345)
+			{
+			read_rating_data(fd);
+			}
+
+		switch (fd->rating)
+			{
+			case 5:
+				ret = FORMAT_RATING_5;
+				break;
+			case 4:
+				ret = FORMAT_RATING_4;
+				break;
+			case 3:
+				ret = FORMAT_RATING_3;
+				break;
+			case 2:
+				ret = FORMAT_RATING_2;
+				break;
+			case 1:
+				ret = FORMAT_RATING_1;
+				break;
+			case 0:
+				ret = FORMAT_RATING_UNRATED;
+				break;
+			case -1:
+				ret = FORMAT_RATING_REJECTED;
+				break;
+			default:
+				ret = FORMAT_RATING_UNRATED;
+			}
+		}
+
+	return ret;
 }
 
 gboolean filter_name_is_writable(const gchar *name)

@@ -106,22 +106,7 @@ gchar *FileData::text_from_size(gint64 size)
 
 gchar *FileData::text_from_size_abrev(gint64 size)
 {
-	if (size < static_cast<gint64>(1024))
-		{
-		return g_strdup_printf(_("%d bytes"), static_cast<gint>(size));
-		}
-	if (size < static_cast<gint64>(1048576))
-		{
-		return g_strdup_printf(_("%.1f KiB"), static_cast<gdouble>(size) / 1024.0);
-		}
-	if (size < static_cast<gint64>(1073741824))
-		{
-		return g_strdup_printf(_("%.1f MiB"), static_cast<gdouble>(size) / 1048576.0);
-		}
-
-	/* to avoid overflowing the gdouble, do division in two steps */
-	size /= 1048576;
-	return g_strdup_printf(_("%.1f GiB"), static_cast<gdouble>(size) / 1024.0);
+	return g_format_size_full(size, G_FORMAT_SIZE_IEC_UNITS);
 }
 
 /* note: returned string is valid until next call to text_from_time() */
@@ -601,6 +586,9 @@ FileData *FileData::file_data_ref()
 
 #ifdef DEBUG_FILEDATA
 	DEBUG_2("file_data_ref fd=%p (%d): '%s' @ %s:%d", (void *)fd, fd->ref, fd->path, file, line);
+        #ifdef FD_VERBOSE_DEBUG
+        fd->debug_info.record_ref(file, line, fd->ref);
+        #endif
 #else
 	DEBUG_2("file_data_ref fd=%p (%d): '%s'", fd, fd->ref, fd->path);
 #endif
@@ -630,6 +618,13 @@ void FileData::file_data_dump()
 		{
 		auto *fd = static_cast<FileData *>(work->data);
 		log_printf("%-4d %s", fd->ref, fd->path);
+
+		#ifdef FD_VERBOSE_DEBUG
+		for (const auto &record : fd->debug_info.ref_unref_history) {
+			log_printf("    %s", record.c_str());
+		}
+		#endif
+
 		work = work->next;
 		}
 
@@ -732,6 +727,11 @@ void FileData::file_data_unref()
 #ifdef DEBUG_FILEDATA
 	DEBUG_2("file_data_unref fd=%p (%d:%d): '%s' @ %s:%d", (void *)fd, fd->ref, fd->locked, fd->path,
 		file, line);
+
+	#ifdef FD_VERBOSE_DEBUG
+	fd->debug_info.record_unref(file, line, fd->ref);
+	#endif
+
 #else
 	DEBUG_2("file_data_unref fd=%p (%d:%d): '%s'", fd, fd->ref, fd->locked, fd->path);
 #endif
@@ -1411,6 +1411,21 @@ static gboolean file_data_filter_class(FileData *fd, guint filter)
 	return FALSE;
 }
 
+static gboolean file_data_filter_rating(FileData *fd, guint filter)
+{
+	if (filter != 0)
+		{
+		gint rating = static_cast<gint>(filter_file_get_rating(fd));
+
+		gint idx = rating + 1;
+
+		return (filter & (1U << idx)) != 0;
+		}
+
+	/* Filter disabled - show all files */
+	return TRUE;
+}
+
 GList *FileData::file_data_filter_class_list(GList *list, guint filter)
 {
 	GList *work;
@@ -1423,6 +1438,28 @@ GList *FileData::file_data_filter_class_list(GList *list, guint filter)
 		work = work->next;
 
 		if (!file_data_filter_class(fd, filter))
+			{
+			list = g_list_remove_link(list, link);
+			::file_data_unref(fd);
+			g_list_free(link);
+			}
+		}
+
+	return list;
+}
+
+GList *FileData::file_data_filter_rating_list(GList *list, guint filter)
+{
+	GList *work;
+
+	work = list;
+	while (work)
+		{
+		auto fd = static_cast<FileData *>(work->data);
+		GList *link = work;
+		work = work->next;
+
+		if (!file_data_filter_rating(fd, filter))
 			{
 			list = g_list_remove_link(list, link);
 			::file_data_unref(fd);
@@ -1498,7 +1535,7 @@ gchar *FileData::file_data_sc_list_to_string(FileData *fd)
 
 
 /*
- * add FileDataChangeInfo (see typedefs.h) for the given operation
+ * add FileDataChangeInfo for the given operation
  * uses file_data_add_change_info
  *
  * fails if the fd->change already exists - change operations can't run in parallel
@@ -2803,8 +2840,7 @@ gboolean FileData::file_data_unregister_real_time_monitor(FileData *fd)
 
 	if (g_hash_table_size(file_data_monitor_pool) == 0)
 		{
-		g_source_remove(realtime_monitor_id);
-		realtime_monitor_id = 0;
+		g_clear_handle_id(&realtime_monitor_id, g_source_remove);
 		return FALSE;
 		}
 
@@ -2966,6 +3002,12 @@ void FileData::file_data_dec_page_num(FileData *fd)
 void FileData::file_data_set_page_total(FileData *fd, gint page_total)
 {
 	fd->page_total = page_total;
+}
+
+bool FileData::supports_exif_orientation() const
+{
+	return (g_strcmp0(format_name, "heif") != 0)
+	    && (g_strcmp0(format_name, "jxl") != 0);
 }
 
 FileDataRef::FileDataRef(FileData &fd, gboolean skip_ref) : fd_(fd)

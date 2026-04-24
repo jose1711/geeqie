@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "image-load.h"
-#include "ui-fileops.h"
 
 namespace
 {
@@ -35,7 +34,7 @@ struct ImageLoaderEXR : public ImageLoaderBackend
 public:
 	~ImageLoaderEXR() override;
 
-	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data) override;
+	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data) override;
 	gboolean write(const guchar *buf, gsize &chunk_size, gsize count, GError **error) override;
 	GdkPixbuf *get_pixbuf() override;
 	gchar *get_format_name() override;
@@ -79,7 +78,7 @@ public:
 		_pos = pos;
 	}
 
-	bool isMemoryMapped() const override
+	[[nodiscard]] bool isMemoryMapped() const override
 	{
 		return true;
 	}
@@ -118,7 +117,7 @@ gboolean ImageLoaderEXR::write(const guchar *buffer, gsize &chunk_size, gsize co
 		file.readPixels(dw.min.y, dw.max.y);
 
 		// Convert EXR pixel data to GdkPixbuf format (8-bit RGBA)
-		std::vector<guchar> image_data(width * height * 4);
+		auto *image_data = g_new0(guchar, width * height * 4);
 		for (gint y = 0; y < height; ++y)
 			{
 			for (gint x = 0; x < width; ++x)
@@ -141,9 +140,7 @@ gboolean ImageLoaderEXR::write(const guchar *buffer, gsize &chunk_size, gsize co
 
 		/* Create GdkPixbuf from raw RGBA data
 		 * EXR always has alpha */
-		GdkPixbuf *pixbuf_tmp = gdk_pixbuf_new_from_data(image_data.data(), GDK_COLORSPACE_RGB, TRUE, 8, width, height, width * 4, nullptr, nullptr);
-
-		pixbuf = gdk_pixbuf_copy(pixbuf_tmp); // A copy of image_data is required
+		pixbuf = gdk_pixbuf_new_from_data(image_data, GDK_COLORSPACE_RGB, TRUE, 8, width, height, width * 4, free_pixels, nullptr);
 
 		area_updated_cb(nullptr, 0, 0, width, height, data);
 
@@ -159,7 +156,7 @@ gboolean ImageLoaderEXR::write(const guchar *buffer, gsize &chunk_size, gsize co
 		}
 }
 
-void ImageLoaderEXR::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, AreaPreparedCb, gpointer data)
+void ImageLoaderEXR::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, gpointer data)
 {
 	this->area_updated_cb = area_updated_cb;
 	this->data = data;

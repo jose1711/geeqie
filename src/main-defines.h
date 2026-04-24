@@ -19,8 +19,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef _MAIN_DEFINES_H
-#define _MAIN_DEFINES_H
+#ifndef MAIN_DEFINES_H
+#define MAIN_DEFINES_H
 
 #define USE_XDG 1
 
@@ -34,9 +34,10 @@
 #define GQ_TRASH_DIR		"trash"
 #define GQ_WINDOW_LAYOUTS_DIR	"layouts"
 #define GQ_ARCHIVE_DIR	"geeqie-archive"
-#define GQ_RESOURCE_PATH_ICONS "/org/geeqie/icons"
-#define GQ_RESOURCE_PATH_CREDITS "/org/geeqie/credits"
-#define GQ_RESOURCE_PATH_UI "/org/geeqie/ui"
+#define GQ_RESOURCE_PATH_ICONS "/org/geeqie/geeqie/icons"
+#define GQ_RESOURCE_PATH_CREDITS "/org/geeqie/geeqie/credits"
+#define GQ_RESOURCE_PATH_IMAGES "/org/geeqie/geeqie/images"
+#define GQ_RESOURCE_PATH_UI "/org/geeqie/geeqie/ui"
 
 #define GQ_SYSTEM_WIDE_DIR    "/etc/" GQ_APPNAME_LC
 
@@ -45,16 +46,10 @@
 
 #define GQ_COLLECTION_EXT ".gqv"
 
-// @todo Deduplicate mousewheel_scrolls processing
-#define MOUSEWHEEL_SCROLL_SIZE 20
-
-
 #define GQ_DEFAULT_SHELL_PATH "/bin/sh"
 #define GQ_DEFAULT_SHELL_OPTIONS "-c"
 
 #define DEFAULT_MINIMAL_WINDOW_SIZE 100
-
-#define GQ_RESPONSE_NAME_CLICKED 1
 
 #define DEFAULT_OVERLAY_INFO	"%collection:<i>*</i>\\n%" \
 				"(%number%/%total%) [%zoom%] <b>%name%</b>\n" \
@@ -73,6 +68,14 @@
 #define STAR_RATING_NOT_READ -12345
 #define STAR_RATING_REJECTED 0x274C //Unicode Character 'Cross Mark'
 #define STAR_RATING_STAR 0x2738 //Unicode Character 'Heavy Eight Pointed Rectilinear Black Star'
+
+#define CMD_COPY     "geeqie-copy-command.desktop"
+#define CMD_MOVE     "geeqie-move-command.desktop"
+#define CMD_RENAME   "geeqie-rename-command.desktop"
+#define CMD_DELETE   "geeqie-delete-command.desktop"
+#define CMD_FOLDER   "geeqie-folder-command.desktop"
+
+#define FILEDATA_MARKS_SIZE 10
 
 #define GQ_ICON_ADD "list-add"
 #define GQ_ICON_REMOVE "list-remove"
@@ -166,5 +169,5 @@
 // PIXBUF_INLINE_ICON_ZOOMFILLHOR
 // PIXBUF_INLINE_ICON_ZOOMFILLVERT
 
-#endif /* _MAIN_DEFINES_H */
+#endif /* MAIN_DEFINES_H */
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

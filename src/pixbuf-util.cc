@@ -42,8 +42,10 @@
 #include "compat-deprecated.h"
 #include "exif.h"
 #include "filedata.h"
+#include "filefilter.h"
+#include "geometry.h"
+#include "gq-color.h"
 #include "main-defines.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 
 namespace
@@ -77,6 +79,7 @@ constexpr PixbufInline inline_pixbuf_data[] = {
 	{ PIXBUF_INLINE_ICON_MOVE,              "gq-icon-move" },
 	{ PIXBUF_INLINE_ICON_ORIGINAL,          "gq-icon-original" },
 	{ PIXBUF_INLINE_ICON_PANORAMA,          "gq-icon-panorama" },
+	{ PIXBUF_INLINE_ICON_PLACEHOLDER,       "gq-icon-placeholder" },
 	{ PIXBUF_INLINE_ICON_PDF,               "gq-icon-pdf" },
 	{ PIXBUF_INLINE_ICON_PROPERTIES,        "gq-icon-properties" },
 	{ PIXBUF_INLINE_ICON_RENAME,            "gq-icon-rename" },
@@ -98,9 +101,6 @@ constexpr PixbufInline inline_pixbuf_data[] = {
 	{ PIXBUF_INLINE_VIDEO,                  "gq-icon-video" },
 };
 
-constexpr gint ROTATE_BUFFER_WIDTH = 48;
-constexpr gint ROTATE_BUFFER_HEIGHT = 48;
-
 // Intersects the clip region with the pixbuf. r is that intersecting region.
 gboolean pixbuf_clip_region(const GdkPixbuf *pb, GdkRectangle clip, GdkRectangle &r)
 {
@@ -111,6 +111,21 @@ gboolean pixbuf_clip_region(const GdkPixbuf *pb, GdkRectangle clip, GdkRectangle
 	return gdk_rectangle_intersect(&pb_rect, &clip, &r);
 }
 
+void pixel_mix_color(guchar *pp, GqColor color)
+{
+	pp[0] = (color.r * color.a + pp[0] * (256 - color.a)) >> 8;
+	pp[1] = (color.g * color.a + pp[1] * (256 - color.a)) >> 8;
+	pp[2] = (color.b * color.a + pp[2] * (256 - color.a)) >> 8;
+}
+
+void pixel_set_color(guchar *pp, GqColor color, gboolean set_alpha)
+{
+	pp[0] = color.r;
+	pp[1] = color.g;
+	pp[2] = color.b;
+	if (set_alpha) pp[3] = color.a;
+}
+
 /*
  * Fills rectangular region of pixbuf defined by
  * corners `(x1, y1)` and `(x2, y2)` from `rect`
@@ -119,8 +134,7 @@ gboolean pixbuf_clip_region(const GdkPixbuf *pb, GdkRectangle clip, GdkRectangle
  */
 void pixbuf_draw_rect_fill(guchar *p_pix, gint prs, gboolean has_alpha,
                            GdkRectangle rect,
-                           guint8 r, guint8 g, guint8 b,
-                           const GetAlpha &get_alpha)
+                           GqColor color, const GetAlpha &get_alpha)
 {
 	const gint x1 = rect.x;
 	const gint y1 = rect.y;
@@ -134,11 +148,9 @@ void pixbuf_draw_rect_fill(guchar *p_pix, gint prs, gboolean has_alpha,
 
 		for (gint x = x1; x < x2; x++)
 			{
-			guint8 a = get_alpha(x, y);
+			color.a = get_alpha(x, y);
 
-			pp[0] = (r * a + pp[0] * (256-a)) >> 8;
-			pp[1] = (g * a + pp[1] * (256-a)) >> 8;
-			pp[2] = (b * a + pp[2] * (256-a)) >> 8;
+			pixel_mix_color(pp, color);
 			pp += p_step;
 			}
 		}
@@ -185,7 +197,8 @@ GdkPixbuf *pixbuf_inline(const gchar *key)
 	GtkSettings *settings = gtk_settings_get_default();
 	g_autofree gchar *theme_name = nullptr;
 	g_object_get(settings, "gtk-theme-name", &theme_name, nullptr);
-	gboolean dark = g_str_has_suffix(theme_name, "dark");
+	g_autofree gchar *theme_name_lc = g_ascii_strdown(theme_name, -1);
+	gboolean dark = g_str_has_suffix(theme_name_lc, "dark");
 
 	const auto it = std::find_if(std::cbegin(inline_pixbuf_data), std::cend(inline_pixbuf_data),
 	                             [key](const PixbufInline &pi){ return strcmp(pi.key, key) == 0; });
@@ -197,7 +210,7 @@ GdkPixbuf *pixbuf_inline(const gchar *key)
 
 	const auto get_input_stream = [](const gchar *data, gboolean dark, GError **error) -> GInputStream *
 	{
-		g_autofree gchar *file_name = g_strconcat(data, dark ? "-dark" : "", ".png", nullptr);
+		g_autofree gchar *file_name = g_strconcat(data, dark ? "-dark" : "", ".svg", nullptr);
 		g_autofree gchar *path = g_build_filename(GQ_RESOURCE_PATH_ICONS, file_name, nullptr);
 		return g_resources_open_stream(path, G_RESOURCE_LOOKUP_FLAGS_NONE, error);
 	};
@@ -230,19 +243,25 @@ GdkPixbuf *pixbuf_inline(const gchar *key)
 	return icon_pixbuf;
 }
 
+#if HAVE_GTK4
+static void register_stock_icon(const gchar *key, GdkPixbuf *pixbuf)
+{
+/* @FIXME GTK4 stub */
+}
+#else
 static void register_stock_icon(const gchar *key, GdkPixbuf *pixbuf)
 {
 	static GtkIconFactory *icon_factory = []()
 	{
-		GtkIconFactory *icon_factory = gq_gtk_icon_factory_new();
-		gq_gtk_icon_factory_add_default(icon_factory);
+		GtkIconFactory *icon_factory = deprecated_gtk_icon_factory_new();
+		deprecated_gtk_icon_factory_add_default(icon_factory);
 		return icon_factory;
 	}();
 
-	GtkIconSet *icon_set = gq_gtk_icon_set_new_from_pixbuf(pixbuf);
-	gq_gtk_icon_factory_add(icon_factory, key, icon_set);
+	GtkIconSet *icon_set = deprecated_gtk_icon_set_new_from_pixbuf(pixbuf);
+	deprecated_gtk_icon_factory_add(icon_factory, key, icon_set);
 }
-
+#endif
 
 void pixbuf_inline_register_stock_icons()
 {
@@ -389,233 +408,10 @@ GdkPixbuf *pixbuf_fallback(FileData *fd, gint requested_width, gint requested_he
  *-----------------------------------------------------------------------------
  */
 
-static void pixbuf_copy_block_rotate(guchar *src, gint src_row_stride, gint x, gint y,
-				     guchar *dest, gint dest_row_stride, gint w, gint h,
-				     gint bytes_per_pixel, gboolean counter_clockwise)
-{
-	gint i;
-	gint j;
-	guchar *sp;
-	guchar *dp;
-
-	for (i = 0; i < h; i++)
-		{
-		sp = src + ((i + y) * src_row_stride) + (x * bytes_per_pixel);
-		for (j = 0; j < w; j++)
-			{
-			if (counter_clockwise)
-				{
-				dp = dest + ((w - j - 1) * dest_row_stride) + (i * bytes_per_pixel);
-				}
-			else
-				{
-				dp = dest + (j * dest_row_stride) + ((h - i - 1) * bytes_per_pixel);
-				}
-			*(dp++) = *(sp++);	/* r */
-			*(dp++) = *(sp++);	/* g */
-			*(dp++) = *(sp++);	/* b */
-			if (bytes_per_pixel == 4) *(dp) = *(sp++);	/* a */
-			}
-		}
-
-}
-
-static void pixbuf_copy_block(guchar *src, gint src_row_stride, gint w, gint h,
-			      guchar *dest, gint dest_row_stride, gint x, gint y, gint bytes_per_pixel)
-{
-	gint i;
-	guchar *sp;
-	guchar *dp;
-
-	for (i = 0; i < h; i++)
-		{
-		sp = src + (i * src_row_stride);
-		dp = dest + ((y + i) * dest_row_stride) + (x * bytes_per_pixel);
-		memcpy(dp, sp, w * bytes_per_pixel);
-		}
-}
-
-/*
- * Returns a copy of pixbuf src rotated 90 degrees clockwise or 90 counterclockwise
- *
- */
-GdkPixbuf *pixbuf_copy_rotate_90(GdkPixbuf *src, gboolean counter_clockwise)
-{
-	GdkPixbuf *dest;
-	gboolean has_alpha;
-	gint sw;
-	gint sh;
-	gint srs;
-	gint dw;
-	gint dh;
-	gint drs;
-	guchar *s_pix;
-	guchar *d_pix;
-	gint i;
-	gint j;
-	gint a;
-	GdkPixbuf *buffer;
-	guchar *b_pix;
-	gint brs;
-	gint w;
-	gint h;
-
-	if (!src) return nullptr;
-
-	sw = gdk_pixbuf_get_width(src);
-	sh = gdk_pixbuf_get_height(src);
-	has_alpha = gdk_pixbuf_get_has_alpha(src);
-	srs = gdk_pixbuf_get_rowstride(src);
-	s_pix = gdk_pixbuf_get_pixels(src);
-
-	dw = sh;
-	dh = sw;
-	dest = gdk_pixbuf_new(GDK_COLORSPACE_RGB, has_alpha, 8, dw, dh);
-	drs = gdk_pixbuf_get_rowstride(dest);
-	d_pix = gdk_pixbuf_get_pixels(dest);
-
-	a = (has_alpha ? 4 : 3);
-
-	buffer = gdk_pixbuf_new(GDK_COLORSPACE_RGB, has_alpha, 8,
-				ROTATE_BUFFER_WIDTH, ROTATE_BUFFER_HEIGHT);
-	b_pix = gdk_pixbuf_get_pixels(buffer);
-	brs = gdk_pixbuf_get_rowstride(buffer);
-
-	for (i = 0; i < sh; i+= ROTATE_BUFFER_WIDTH)
-		{
-		w = std::min(ROTATE_BUFFER_WIDTH, sh - i);
-		for (j = 0; j < sw; j += ROTATE_BUFFER_HEIGHT)
-			{
-			gint x;
-			gint y;
-
-			h = std::min(ROTATE_BUFFER_HEIGHT, sw - j);
-			pixbuf_copy_block_rotate(s_pix, srs, j, i,
-						 b_pix, brs, h, w,
-						 a, counter_clockwise);
-
-			if (counter_clockwise)
-				{
-				x = i;
-				y = sw - h - j;
-				}
-			else
-				{
-				x = sh - w - i;
-				y = j;
-				}
-			pixbuf_copy_block(b_pix, brs, w, h,
-					  d_pix, drs, x, y, a);
-			}
-		}
-
-	g_object_unref(buffer);
-
-#if 0
-	/* this is the simple version of rotation (roughly 2-4x slower) */
-
-	for (i = 0; i < sh; i++)
-		{
-		sp = s_pix + (i * srs);
-		for (j = 0; j < sw; j++)
-			{
-			if (counter_clockwise)
-				{
-				dp = d_pix + ((dh - j - 1) * drs) + (i * a);
-				}
-			else
-				{
-				dp = d_pix + (j * drs) + ((dw - i - 1) * a);
-				}
-
-			*(dp++) = *(sp++);	/* r */
-			*(dp++) = *(sp++);	/* g */
-			*(dp++) = *(sp++);	/* b */
-			if (has_alpha) *(dp) = *(sp++);	/* a */
-			}
-		}
-#endif
-
-	return dest;
-}
-
-/*
- * Returns a copy of pixbuf mirrored and or flipped.
- * TO do a 180 degree rotations set both mirror and flipped TRUE
- * if mirror and flip are FALSE, result is a simple copy.
- */
-GdkPixbuf *pixbuf_copy_mirror(GdkPixbuf *src, gboolean mirror, gboolean flip)
-{
-	GdkPixbuf *dest;
-	gboolean has_alpha;
-	gint w;
-	gint h;
-	gint srs;
-	gint drs;
-	guchar *s_pix;
-	guchar *d_pix;
-	guchar *sp;
-	guchar *dp;
-	gint i;
-	gint j;
-	gint a;
-
-	if (!src) return nullptr;
-
-	w = gdk_pixbuf_get_width(src);
-	h = gdk_pixbuf_get_height(src);
-	has_alpha = gdk_pixbuf_get_has_alpha(src);
-	srs = gdk_pixbuf_get_rowstride(src);
-	s_pix = gdk_pixbuf_get_pixels(src);
-
-	dest = gdk_pixbuf_new(GDK_COLORSPACE_RGB, has_alpha, 8, w, h);
-	drs = gdk_pixbuf_get_rowstride(dest);
-	d_pix = gdk_pixbuf_get_pixels(dest);
-
-	a = has_alpha ? 4 : 3;
-
-	for (i = 0; i < h; i++)
-		{
-		sp = s_pix + (i * srs);
-		if (flip)
-			{
-			dp = d_pix + ((h - i - 1) * drs);
-			}
-		else
-			{
-			dp = d_pix + (i * drs);
-			}
-		if (mirror)
-			{
-			dp += (w - 1) * a;
-			for (j = 0; j < w; j++)
-				{
-				*(dp++) = *(sp++);	/* r */
-				*(dp++) = *(sp++);	/* g */
-				*(dp++) = *(sp++);	/* b */
-				if (has_alpha) *(dp) = *(sp++);	/* a */
-				dp -= (a + 3);
-				}
-			}
-		else
-			{
-			for (j = 0; j < w; j++)
-				{
-				*(dp++) = *(sp++);	/* r */
-				*(dp++) = *(sp++);	/* g */
-				*(dp++) = *(sp++);	/* b */
-				if (has_alpha) *(dp++) = *(sp++);	/* a */
-				}
-			}
-		}
-
-	return dest;
-}
-
 GdkPixbuf *pixbuf_apply_orientation(GdkPixbuf *pixbuf, gint orientation)
 {
-	GdkPixbuf *dest;
-	GdkPixbuf *tmp = nullptr;
+	GdkPixbuf *dest = nullptr;
+	g_autoptr(GdkPixbuf) flipped = nullptr;
 
 	switch (orientation)
 		{
@@ -624,39 +420,38 @@ GdkPixbuf *pixbuf_apply_orientation(GdkPixbuf *pixbuf, gint orientation)
 			break;
 		case EXIF_ORIENTATION_TOP_RIGHT:
 			/* mirrored */
-			dest = pixbuf_copy_mirror(pixbuf, TRUE, FALSE);
+			dest = gdk_pixbuf_flip(pixbuf, TRUE);
 			break;
 		case EXIF_ORIENTATION_BOTTOM_RIGHT:
 			/* upside down */
-			dest = pixbuf_copy_mirror(pixbuf, TRUE, TRUE);
+			dest = gdk_pixbuf_rotate_simple(pixbuf, GDK_PIXBUF_ROTATE_UPSIDEDOWN);
 			break;
 		case EXIF_ORIENTATION_BOTTOM_LEFT:
 			/* flipped */
-			dest = pixbuf_copy_mirror(pixbuf, FALSE, TRUE);
+			dest = gdk_pixbuf_flip(pixbuf, FALSE);
 			break;
 		case EXIF_ORIENTATION_LEFT_TOP:
-			tmp = pixbuf_copy_mirror(pixbuf, FALSE, TRUE);
-			dest = pixbuf_copy_rotate_90(tmp, FALSE);
+			flipped = gdk_pixbuf_flip(pixbuf, FALSE);
+			dest = gdk_pixbuf_rotate_simple(flipped, GDK_PIXBUF_ROTATE_CLOCKWISE);
 			break;
 		case EXIF_ORIENTATION_RIGHT_TOP:
 			/* rotated -90 (270) */
-			dest = pixbuf_copy_rotate_90(pixbuf, FALSE);
+			dest = gdk_pixbuf_rotate_simple(pixbuf, GDK_PIXBUF_ROTATE_CLOCKWISE);
 			break;
 		case EXIF_ORIENTATION_RIGHT_BOTTOM:
-			tmp = pixbuf_copy_mirror(pixbuf, FALSE, TRUE);
-			dest = pixbuf_copy_rotate_90(tmp, TRUE);
+			flipped = gdk_pixbuf_flip(pixbuf, FALSE);
+			dest = gdk_pixbuf_rotate_simple(flipped, GDK_PIXBUF_ROTATE_COUNTERCLOCKWISE);
 			break;
 		case EXIF_ORIENTATION_LEFT_BOTTOM:
 			/* rotated 90 */
-			dest = pixbuf_copy_rotate_90(pixbuf, TRUE);
+			dest = gdk_pixbuf_rotate_simple(pixbuf, GDK_PIXBUF_ROTATE_COUNTERCLOCKWISE);
 			break;
 		default:
 			dest = gdk_pixbuf_copy(pixbuf);
 			break;
 		}
-	if (tmp) g_object_unref(tmp);
-	return dest;
 
+	return dest;
 }
 
 
@@ -672,13 +467,11 @@ GdkPixbuf *pixbuf_apply_orientation(GdkPixbuf *pixbuf, gint orientation)
  *        parameter.
  * @param pb The `GdkPixbuf` to paint into.
  * @param rect The specified region.
- * @param r,g,b Fill color.
- * @param a The alpha to use for compositing. a=255 is solid (fully the new
- *          color).  a=0 is tranparent (fully the original contents).
+ * @param color Fill color. The color.a is used for compositing.
+ *              a=255 is solid (fully the new color).
+ *              a=0 is tranparent (fully the original contents).
  */
-void pixbuf_draw_rect_fill(GdkPixbuf *pb,
-                           GdkRectangle rect,
-                           gint r, gint g, gint b, gint a)
+void pixbuf_draw_rect_fill(GdkPixbuf *pb, GdkRectangle rect, GqColor color)
 {
 	gboolean has_alpha;
 	gint pw;
@@ -698,12 +491,12 @@ void pixbuf_draw_rect_fill(GdkPixbuf *pb,
 	prs = gdk_pixbuf_get_rowstride(pb);
 	p_pix = gdk_pixbuf_get_pixels(pb);
 
-	const auto get_a = [a](gint, gint){ return a; };
+	const auto get_a = [a = color.a](gint, gint){ return a; };
 
 	// TODO(xsdg): Should we do anything about a potential
 	// existing alpha value here?
 
-	pixbuf_draw_rect_fill(p_pix, prs, has_alpha, rect, r, g, b, get_a);
+	pixbuf_draw_rect_fill(p_pix, prs, has_alpha, rect, color, get_a);
 }
 
 /**
@@ -711,11 +504,11 @@ void pixbuf_draw_rect_fill(GdkPixbuf *pb,
  * @param pb The `GdkPixbuf` to paint into.
  * @param x,y Coordinates of the top-left corner of the first region.
  * @param w,h Extent of the first region.
- * @param r,g,b,a Fill color and alpha.
+ * @param color Fill color and alpha.
  */
 void pixbuf_set_rect_fill(GdkPixbuf *pb,
-			  gint x, gint y, gint w, gint h,
-			  gint r, gint g, gint b, gint a)
+                          gint x, gint y, gint w, gint h,
+                          GqColor color)
 {
 	gboolean has_alpha;
 	gint pw;
@@ -745,10 +538,8 @@ void pixbuf_set_rect_fill(GdkPixbuf *pb,
 		pp = p_pix + (y + i) * prs + (x * p_step);
 		for (j = 0; j < w; j++)
 			{
-			*pp = r; pp++;
-			*pp = g; pp++;
-			*pp = b; pp++;
-			if (has_alpha) { *pp = a; pp++; }
+			pixel_set_color(pp, color, has_alpha);
+			pp += p_step;
 			}
 		}
 }
@@ -759,59 +550,51 @@ void pixbuf_set_rect_fill(GdkPixbuf *pb,
  * @param pb The `GdkPixbuf` to paint into.
  * @param x,y Coordinates of the top-left corner of the region.
  * @param w,h Extent of the region.
- * @param r,g,b,a Line color and alpha.
+ * @param color Line color and alpha.
  * @param left_width Stroke width of the left edge of the rectangle.
  * @param right_width Stroke width of the right edge of the rectangle.
  * @param top_width Stroke width of the top edge of the rectangle.
  * @param bottom_width Stroke width of the bottom edge of the rectangle.
  */
 void pixbuf_set_rect(GdkPixbuf *pb,
-		     gint x, gint y, gint w, gint h,
-		     gint r, gint g, gint b, gint a,
-		     gint left_width, gint right_width, gint top_width, gint bottom_width)
+                     gint x, gint y, gint w, gint h,
+                     GqColor color,
+                     gint left_width, gint right_width, gint top_width, gint bottom_width)
 {
 	// TODO(xsdg): This function has multiple off-by-one errors.  Would be
 	// much easier to read (and implement correctly) with temporaries to
 	// translate from (x, y, w, h) coordinates to (x1, y1, x2, y2).
 	pixbuf_set_rect_fill(pb,
-			     x + left_width, y, w - left_width - right_width, top_width,
-			     r, g, b ,a);
+	                     x + left_width, y, w - left_width - right_width, top_width,
+	                     color);
 	pixbuf_set_rect_fill(pb,
-			     x + w - right_width, y, right_width, h,
-			     r, g, b ,a);
+	                     x + w - right_width, y, right_width, h,
+	                     color);
 	pixbuf_set_rect_fill(pb,
-			     x + left_width, y + h - bottom_width, w - left_width - right_width, bottom_width,
-			     r, g, b ,a);
+	                     x + left_width, y + h - bottom_width, w - left_width - right_width, bottom_width,
+	                     color);
 	pixbuf_set_rect_fill(pb,
-			     x, y, left_width, h,
-			     r, g, b ,a);
+	                     x, y, left_width, h,
+	                     color);
 }
 
 /**
  * @brief Sets the specified pixel of the pixbuf to the specified color.
  * @param pb The `GdkPixbuf` to paint into.
  * @param x,y Coordinates of the pixel to set.
- * @param r,g,b,a Color and alpha.
+ * @param color Color and alpha.
  */
-void pixbuf_pixel_set(GdkPixbuf *pb, gint x, gint y, gint r, gint g, gint b, gint a)
+void pixbuf_pixel_set(GdkPixbuf *pb, gint x, gint y, GqColor color)
 {
-	guchar *buf;
-	gboolean has_alpha;
-	gint rowstride;
-	guchar *p;
-
 	if (x < 0 || x >= gdk_pixbuf_get_width(pb) ||
 	    y < 0 || y >= gdk_pixbuf_get_height(pb)) return;
 
-	buf = gdk_pixbuf_get_pixels(pb);
-	has_alpha = gdk_pixbuf_get_has_alpha(pb);
-	rowstride = gdk_pixbuf_get_rowstride(pb);
+	guchar *buf = gdk_pixbuf_get_pixels(pb);
+	const gboolean has_alpha = gdk_pixbuf_get_has_alpha(pb);
+	const gint rowstride = gdk_pixbuf_get_rowstride(pb);
 
-	p = buf + (y * rowstride) + (x * (has_alpha ? 4 : 3));
-	*p = r; p++;
-	*p = g; p++;
-	*p = b; p++;
-	if (has_alpha) *p = a;
+	guchar *p = buf + (y * rowstride) + (x * (has_alpha ? 4 : 3));
+	pixel_set_color(p, color, has_alpha);
 }
 
 
@@ -822,70 +605,45 @@ void pixbuf_pixel_set(GdkPixbuf *pb, gint x, gint y, gint r, gint g, gint b, gin
  */
 
 static void pixbuf_copy_font(GdkPixbuf *src, gint sx, gint sy,
-			     GdkPixbuf *dest, gint dx, gint dy,
-			     gint w, gint h,
-			     guint8 r, guint8 g, guint8 b, guint8 a)
+                             GdkPixbuf *dest, gint dx, gint dy,
+                             gint w, gint h, GqColor color)
 {
-	gint sw;
-	gint sh;
-	gint srs;
-	gboolean s_alpha;
-	gint s_step;
-	guchar *s_pix;
-	gint dw;
-	gint dh;
-	gint drs;
-	gboolean d_alpha;
-	gint d_step;
-	guchar *d_pix;
+	if (!src || !dest || sx < 0 || sy < 0 || dx < 0 || dy < 0) return;
 
-	guchar *sp;
-	guchar *dp;
-	gint i;
-	gint j;
+	if (sx + w > gdk_pixbuf_get_width(src)) return;
+	if (sy + h > gdk_pixbuf_get_height(src)) return;
 
-	if (!src || !dest) return;
+	if (dx + w > gdk_pixbuf_get_width(dest)) return;
+	if (dy + h > gdk_pixbuf_get_height(dest)) return;
 
-	sw = gdk_pixbuf_get_width(src);
-	sh = gdk_pixbuf_get_height(src);
+	const gboolean s_alpha = gdk_pixbuf_get_has_alpha(src);
+	const gboolean d_alpha = gdk_pixbuf_get_has_alpha(dest);
+	const gint srs = gdk_pixbuf_get_rowstride(src);
+	const gint drs = gdk_pixbuf_get_rowstride(dest);
+	guchar *s_pix = gdk_pixbuf_get_pixels(src);
+	guchar *d_pix = gdk_pixbuf_get_pixels(dest);
 
-	if (sx < 0 || sx + w > sw) return;
-	if (sy < 0 || sy + h > sh) return;
+	const gint s_step = s_alpha ? 4 : 3;
+	const gint d_step = d_alpha ? 4 : 3;
 
-	dw = gdk_pixbuf_get_width(dest);
-	dh = gdk_pixbuf_get_height(dest);
-
-	if (dx < 0 || dx + w > dw) return;
-	if (dy < 0 || dy + h > dh) return;
-
-	s_alpha = gdk_pixbuf_get_has_alpha(src);
-	d_alpha = gdk_pixbuf_get_has_alpha(dest);
-	srs = gdk_pixbuf_get_rowstride(src);
-	drs = gdk_pixbuf_get_rowstride(dest);
-	s_pix = gdk_pixbuf_get_pixels(src);
-	d_pix = gdk_pixbuf_get_pixels(dest);
-
-	s_step = (s_alpha) ? 4 : 3;
-	d_step = (d_alpha) ? 4 : 3;
-
-	for (i = 0; i < h; i++)
+	for (gint i = 0; i < h; i++)
 		{
-		sp = s_pix + (sy + i) * srs + sx * s_step;
-		dp = d_pix + (dy + i) * drs + dx * d_step;
-		for (j = 0; j < w; j++)
+		guchar *sp = s_pix + ((sy + i) * srs) + (sx * s_step);
+		guchar *dp = d_pix + ((dy + i) * drs) + (dx * d_step);
+		for (gint j = 0; j < w; j++)
 			{
 			if (*sp)
 				{
 				guint8 asub;
 
-				asub = a * sp[0] / 255;
-				dp[0] = (r * asub + dp[0] * (256-asub)) >> 8;
-				asub = a * sp[1] / 255;
-				dp[1] = (g * asub + dp[1] * (256-asub)) >> 8;
-				asub = a * sp[2] / 255;
-				dp[2] = (b * asub + dp[2] * (256-asub)) >> 8;
+				asub = color.a * sp[0] / 255;
+				dp[0] = (color.r * asub + dp[0] * (256 - asub)) >> 8;
+				asub = color.a * sp[1] / 255;
+				dp[1] = (color.g * asub + dp[1] * (256 - asub)) >> 8;
+				asub = color.a * sp[2] / 255;
+				dp[2] = (color.b * asub + dp[2] * (256 - asub)) >> 8;
 
-				if (d_alpha) dp[3] = std::max<guchar>(dp[3], a * ((sp[0] + sp[1] + sp[2]) / 3) / 255);
+				if (d_alpha) dp[3] = std::max<guchar>(dp[3], color.a * ((sp[0] + sp[1] + sp[2]) / 3) / 255);
 				}
 
 			sp += s_step;
@@ -895,8 +653,7 @@ static void pixbuf_copy_font(GdkPixbuf *src, gint sx, gint sy,
 }
 
 void pixbuf_draw_layout(GdkPixbuf *pixbuf, PangoLayout *layout,
-                        gint x, gint y,
-                        guint8 r, guint8 g, guint8 b, guint8 a)
+                        gint x, gint y, GqColor color)
 {
 	GdkPixbuf *buffer;
 	gint w;
@@ -953,9 +710,7 @@ void pixbuf_draw_layout(GdkPixbuf *pixbuf, PangoLayout *layout,
 	if (x + w > dw)	w = dw - x;
 	if (y + h > dh) h = dh - y;
 
-	pixbuf_copy_font(buffer, sx, sy,
-			 pixbuf, x, y, w, h,
-			 r, g, b, a);
+	pixbuf_copy_font(buffer, sx, sy, pixbuf, x, y, w, h, color);
 
 	g_object_unref(buffer);
 	cairo_surface_destroy(source);
@@ -974,7 +729,7 @@ void pixbuf_draw_layout(GdkPixbuf *pixbuf, PangoLayout *layout,
  * @param[in] c3 Coordinates of the third corner of the triangle.
  * @return The computed bounding box.
  */
-GdkRectangle util_triangle_bounding_box(GdkPoint c1, GdkPoint c2, GdkPoint c3)
+GdkRectangle util_triangle_bounding_box(GqPoint c1, GqPoint c2, GqPoint c3)
 {
 	GdkRectangle bounding_box;
 
@@ -997,11 +752,11 @@ GdkRectangle util_triangle_bounding_box(GdkPoint c1, GdkPoint c2, GdkPoint c3)
  * @param c1 Coordinates of the first corner of the triangle.
  * @param c2 Coordinates of the second corner of the triangle.
  * @param c3 Coordinates of the third corner of the triangle.
- * @param r,g,b,a Color and alpha.
+ * @param color Color and alpha.
  */
 void pixbuf_draw_triangle(GdkPixbuf *pb, GdkRectangle clip,
-                          GdkPoint c1, GdkPoint c2, GdkPoint c3,
-                          guint8 r, guint8 g, guint8 b, guint8 a)
+                          GqPoint c1, GqPoint c2, GqPoint c3,
+                          GqColor color)
 {
 	gboolean has_alpha;
 	gint prs;
@@ -1034,10 +789,10 @@ void pixbuf_draw_triangle(GdkPixbuf *pb, GdkRectangle clip,
 	p_step = (has_alpha) ? 4 : 3;
 
 	// Ensure that points are ordered by increasing y coordinate.
-	std::vector<GdkPoint> v{c1, c2, c3};
-	std::sort(v.begin(), v.end(), [](const GdkPoint &l, const GdkPoint &r){ return l.y < r.y; });
+	std::vector<GqPoint> v{c1, c2, c3};
+	std::sort(v.begin(), v.end(), [](const GqPoint &l, const GqPoint &r){ return l.y < r.y; });
 
-	const auto get_slope = [](GdkPoint start, GdkPoint end)
+	const auto get_slope = [](GqPoint start, GqPoint end)
 	{
 		gdouble slope = end.y - start.y;
 		if (slope) slope = static_cast<gdouble>(end.x - start.x) / slope;
@@ -1045,9 +800,9 @@ void pixbuf_draw_triangle(GdkPixbuf *pb, GdkRectangle clip,
 	};
 
 	gdouble slope1 = get_slope(v[0], v[1]);
-	GdkPoint slope1_start = v[0];
+	GqPoint slope1_start = v[0];
 	const gdouble slope2 = get_slope(v[0], v[2]);
-	const GdkPoint &slope2_start = v[0];
+	const GqPoint &slope2_start = v[0];
 
 	for (gint y = f.y; y < fy2; y++)
 		{
@@ -1067,16 +822,14 @@ void pixbuf_draw_triangle(GdkPixbuf *pb, GdkRectangle clip,
 			std::swap(x1, x2);
 			}
 
-		x1 = CLAMP(x1, f.x, fx2);
-		x2 = CLAMP(x2, f.x, fx2);
+		x1 = std::clamp(x1, f.x, fx2);
+		x2 = std::clamp(x2, f.x, fx2);
 
 		pp = p_pix + y * prs + x1 * p_step;
 
 		while (x1 < x2)
 			{
-			pp[0] = (r * a + pp[0] * (256-a)) >> 8;
-			pp[1] = (g * a + pp[1] * (256-a)) >> 8;
-			pp[2] = (b * a + pp[2] * (256-a)) >> 8;
+			pixel_mix_color(pp, color);
 			pp += p_step;
 
 			x1++;
@@ -1092,21 +845,16 @@ void pixbuf_draw_triangle(GdkPixbuf *pb, GdkRectangle clip,
 
 /**
  * @brief Clips the specified line segment to the specified clipping region.
- * @param[in] clip_x,clip_y Coordinates of the top-left corner of the clipping region.
- * @param[in] clip_w,clip_h Extent of the clipping region.
- * @param[in] x1,y1 Coordinates of the first point of the line segment.
- * @param[in] x2,y2 Coordinates of the second point of the line segment.
- * @param[out] rx1,ry1 Computed coordinates of the first point of the clipped line segment.
- * @param[out] rx2,ry2 Computed coordinates of the second point of the clipped line segment.
+ * @param[in] clip Clipping region.
+ * @param[in/out] x1,y1 Coordinates of the first point of the line segment.
+ * @param[in/out] x2,y2 Coordinates of the second point of the line segment.
  * @retval FALSE The line segment lies outside of the clipping region.
  * @retval TRUE The clip operation was performed, and the output params were set.
  */
-static gboolean util_clip_line(gdouble clip_x, gdouble clip_y, gdouble clip_w, gdouble clip_h,
-                               gdouble x1, gdouble y1, gdouble x2, gdouble y2,
-                               gdouble &rx1, gdouble &ry1, gdouble &rx2, gdouble &ry2)
+static gboolean util_clip_line(GdkRectangle clip,
+                               gdouble &x1, gdouble &y1, gdouble &x2, gdouble &y2)
 {
 	gboolean flip = FALSE;
-	gdouble d;
 
 	// Normalize: Line endpoint 1 must be farther left.
 	if (x1 > x2)
@@ -1116,8 +864,11 @@ static gboolean util_clip_line(gdouble clip_x, gdouble clip_y, gdouble clip_w, g
 		flip = TRUE;
 		}
 
+	const gint clip_right = clip.x + clip.width;
+	const gint clip_bottom = clip.y + clip.height;
+
 	// Ensure the line horizontally overlaps with the clip region.
-	if (x2 < clip_x || x1 > clip_x + clip_w) return FALSE;
+	if (x2 < clip.x || x1 > clip_right) return FALSE;
 
 	// Ensure the line vertically overlaps with the clip region.
 	// Note that a line can both horizontally and vertically overlap with
@@ -1125,33 +876,31 @@ static gboolean util_clip_line(gdouble clip_x, gdouble clip_y, gdouble clip_w, g
 	// case is detected further below.
 	if (y1 < y2)
 		{
-		if (y2 < clip_y || y1 > clip_y + clip_h) return FALSE;
+		if (y2 < clip.y || y1 > clip_bottom) return FALSE;
 		}
 	else
 		{
-		if (y1 < clip_y || y2 > clip_y + clip_h) return FALSE;
+		if (y1 < clip.y || y2 > clip_bottom) return FALSE;
 		}
 
-	d = x2 - x1;
 	// TODO(xsdg): Either use ints here, or define a reasonable epsilon to do the
 	// right thing if -epsilon < d < 0.  We already guaranteed above that x2 >= x1.
-	if (d > 0.0)
+	if (const gdouble d = x2 - x1; d > 0.0)
 		{
-		gdouble slope;
+		const gdouble slope = (y2 - y1) / d;
 
-		slope = (y2 - y1) / d;
 		// If needed, project (x1, y1) to be horizontally within the clip
 		// region, while maintaining the line's slope and y-offset.
-		if (x1 < clip_x)
+		if (x1 < clip.x)
 			{
-			y1 = y1 + slope * (clip_x - x1);
-			x1 = clip_x;
+			y1 = y1 + slope * (clip.x - x1);
+			x1 = clip.x;
 			}
 		// Likewise with (x2, y2).
-		if (x2 > clip_x + clip_w)
+		if (x2 > clip_right)
 			{
-			y2 = y2 + slope * (clip_x + clip_w - x2);
-			x2 = clip_x + clip_w;
+			y2 = y2 + slope * (clip_right - x2);
+			x2 = clip_right;
 			}
 		}
 
@@ -1159,11 +908,11 @@ static gboolean util_clip_line(gdouble clip_x, gdouble clip_y, gdouble clip_w, g
 	// no longer vertically overlap with the clip region.
 	if (y1 < y2)
 		{
-		if (y2 < clip_y || y1 > clip_y + clip_h) return FALSE;
+		if (y2 < clip.y || y1 > clip_bottom) return FALSE;
 		}
 	else
 		{
-		if (y1 < clip_y || y2 > clip_y + clip_h) return FALSE;
+		if (y1 < clip.y || y2 > clip_bottom) return FALSE;
 
 		// Re-normalize: line endpoint 1 must be farther up.
 		std::swap(x1, x2);
@@ -1171,24 +920,22 @@ static gboolean util_clip_line(gdouble clip_x, gdouble clip_y, gdouble clip_w, g
 		flip = !flip;
 		}
 
-	d = y2 - y1;
-	if (d > 0.0)
+	if (const gdouble d = y2 - y1; d > 0.0)
 		{
-		gdouble slope;
+		const gdouble slope = (x2 - x1) / d;
 
-		slope = (x2 - x1) / d;
 		// If needed, project (x1, y1) to be vertically within the clip
 		// region, while maintaining the line's slope and x-offset.
-		if (y1 < clip_y)
+		if (y1 < clip.y)
 			{
-			x1 = x1 + slope * (clip_y - y1);
-			y1 = clip_y;
+			x1 = x1 + slope * (clip.y - y1);
+			y1 = clip.y;
 			}
 		// Likewise with (x2, y2).
-		if (y2 > clip_y + clip_h)
+		if (y2 > clip_bottom)
 			{
-			x2 = x2 + slope * (clip_y + clip_h - y2);
-			y2 = clip_y + clip_h;
+			x2 = x2 + slope * (clip_bottom - y2);
+			y2 = clip_bottom;
 			}
 		}
 
@@ -1196,17 +943,8 @@ static gboolean util_clip_line(gdouble clip_x, gdouble clip_y, gdouble clip_w, g
 	// happened during normalization.
 	if (flip)
 		{
-		rx1 = x2;
-		ry1 = y2;
-		rx2 = x1;
-		ry2 = y1;
-		}
-	else
-		{
-		rx1 = x1;
-		ry1 = y1;
-		rx2 = x2;
-		ry2 = y2;
+		std::swap(x1, x2);
+		std::swap(y1, y2);
 		}
 
 	return TRUE;
@@ -1217,20 +955,15 @@ static gboolean util_clip_line(gdouble clip_x, gdouble clip_y, gdouble clip_w, g
  *        clip region into the pixbuf.
  * @param pb The `GdkPixbuf` to paint into.
  * @param clip Clipping region.
- * @param x1,y1 Coordinates of the first point of the line segment.
- * @param x2,y2 Coordinates of the second point of the line segment.
- * @param r,g,b,a Color and alpha.
+ * @param c1 Coordinates of the first point of the line segment.
+ * @param c2 Coordinates of the second point of the line segment.
+ * @param color Color and alpha.
  */
 void pixbuf_draw_line(GdkPixbuf *pb, GdkRectangle clip,
-                      gint x1, gint y1, gint x2, gint y2,
-                      guint8 r, guint8 g, guint8 b, guint8 a)
+                      GqPoint c1, GqPoint c2, GqColor color)
 {
 	gboolean has_alpha;
 	gint prs;
-	gdouble rx1;
-	gdouble ry1;
-	gdouble rx2;
-	gdouble ry2;
 	guchar *p_pix;
 	gint p_step;
 	gdouble slope;
@@ -1245,9 +978,11 @@ void pixbuf_draw_line(GdkPixbuf *pb, GdkRectangle clip,
 	if (!pixbuf_clip_region(pb, clip, pb_rect)) return;
 
 	// Clips the specified line segment to the intersecting region from above.
-	if (!util_clip_line(pb_rect.x, pb_rect.y, pb_rect.width, pb_rect.height,
-	                    x1, y1, x2, y2,
-	                    rx1, ry1, rx2, ry2)) return;
+	gdouble rx1 = c1.x;
+	gdouble ry1 = c1.y;
+	gdouble rx2 = c2.x;
+	gdouble ry2 = c2.y;
+	if (!util_clip_line(pb_rect, rx1, ry1, rx2, ry2)) return;
 
 	has_alpha = gdk_pixbuf_get_has_alpha(pb);
 	prs = gdk_pixbuf_get_rowstride(pb);
@@ -1255,15 +990,13 @@ void pixbuf_draw_line(GdkPixbuf *pb, GdkRectangle clip,
 
 	p_step = (has_alpha) ? 4 : 3;
 
-	const auto fill_pixel = [pb_rect, p_pix, prs, p_step, r, g, b, a](gint x, gint y)
+	const auto fill_pixel = [pb_rect, p_pix, prs, p_step, &color](gint x, gint y)
 	{
 		if (x < pb_rect.x || x >= pb_rect.x + pb_rect.width ||
 		    y < pb_rect.y || y >= pb_rect.y + pb_rect.height) return;
 
 		guchar *pp = p_pix + (y * prs) + (x * p_step);
-		pp[0] = (r * a + pp[0] * (256-a)) >> 8;
-		pp[1] = (g * a + pp[1] * (256-a)) >> 8;
-		pp[2] = (b * a + pp[2] * (256-a)) >> 8;
+		pixel_mix_color(pp, color);
 	};
 
 	// We draw the clipped line segment along the longer axis first, and
@@ -1327,24 +1060,23 @@ void pixbuf_draw_line(GdkPixbuf *pb, GdkRectangle clip,
  *                 horizontally.
  * @param border The maximum extent of the gradient, in pixels.
  * @param fade_rect The region.
- * @param r,g,b Base color of the gradient.
- * @param a The peak alpha value when compositing the gradient.  The alpha varies
- *          from this value down to 0 (fully transparent).  Note that any alpha
- *          value associated with the original pixel is unmodified.
+ * @param color Base color of the gradient.
+ *              color.a is the peak alpha value when compositing the gradient.
+ *              The alpha varies from this value down to 0 (fully transparent).
+ *              Note that any alpha value associated with the original pixel is unmodified.
  */
 static void pixbuf_draw_fade_linear(guchar *p_pix, gint prs, gboolean has_alpha,
                                     gint s, gboolean vertical, gint border,
-                                    GdkRectangle fade_rect,
-                                    guint8 r, guint8 g, guint8 b, guint8 a)
+                                    GdkRectangle fade_rect, GqColor color)
 {
-	const auto get_a = [s, vertical, border, a](gint x, gint y)
+	const auto get_a = [s, vertical, border, a = color.a](gint x, gint y)
 	{
 		gint coord = vertical ? x : y;
 		gint distance = std::min(border, abs(coord - s));
 		return a - (a * distance / border);
 	};
 
-	pixbuf_draw_rect_fill(p_pix, prs, has_alpha, fade_rect, r, g, b, get_a);
+	pixbuf_draw_rect_fill(p_pix, prs, has_alpha, fade_rect, color, get_a);
 }
 
 /**
@@ -1356,23 +1088,22 @@ static void pixbuf_draw_fade_linear(guchar *p_pix, gint prs, gboolean has_alpha,
  * @param border The max radius, in pixels, of the gradient.  Pixels farther away
  *               from the center than this will be unaffected.
  * @param fade_rect The region.
- * @param r,g,b Base color of the gradient.
- * @param a The peak alpha value when compositing the gradient.  The alpha varies
- *          from this value down to 0 (fully transparent).  Note that any alpha
- *          value associated with the original pixel is unmodified.
+ * @param color Base color of the gradient.
+ *              color.a is the peak alpha value when compositing the gradient.
+ *              The alpha varies from this value down to 0 (fully transparent).
+ *              Note that any alpha value associated with the original pixel is unmodified.
  */
 static void pixbuf_draw_fade_radius(guchar *p_pix, gint prs, gboolean has_alpha,
                                     gint sx, gint sy, gint border,
-                                    GdkRectangle fade_rect,
-                                    guint8 r, guint8 g, guint8 b, guint8 a)
+                                    GdkRectangle fade_rect, GqColor color)
 {
-	const auto get_a = [sx, sy, border, a](gint x, gint y)
+	const auto get_a = [sx, sy, border, a = color.a](gint x, gint y)
 	{
 		gint radius = std::min(border, static_cast<gint>(hypot(x - sx, y - sy)));
 		return a - (a * radius / border);
 	};
 
-	pixbuf_draw_rect_fill(p_pix, prs, has_alpha, fade_rect, r, g, b, get_a);
+	pixbuf_draw_rect_fill(p_pix, prs, has_alpha, fade_rect, color, get_a);
 }
 
 /**
@@ -1385,13 +1116,13 @@ static void pixbuf_draw_fade_radius(guchar *p_pix, gint prs, gboolean has_alpha,
  * @param w,h Extent of the shaded region.
  * @param border The thickness, in pixels, of the gradient border around the
  *        fully-shaded region.
- * @param r,g,b Shadow base color.
- * @param a The max shadow composition fraction.  Note that any alpha value of the
- *          original pixel will remain untouched.
+ * @param color Shadow base color.
+ *              color.a The max shadow composition fraction.
+ *              Note that any alpha value of the original pixel will remain untouched.
  */
 void pixbuf_draw_shadow(GdkPixbuf *pb, GdkRectangle clip,
-                        gint x, gint y, gint w, gint h, gint border,
-                        guint8 r, guint8 g, guint8 b, guint8 a)
+                        gint x, gint y, gint w, gint h,
+                        gint border, GqColor color)
 {
 	gint has_alpha;
 	gint prs;
@@ -1410,24 +1141,22 @@ void pixbuf_draw_shadow(GdkPixbuf *pb, GdkRectangle clip,
 	// as contracted by `border` pixels, with a composition fraction that's defined
 	// by the supplied `a` parameter.
 	const GdkRectangle contracted_rect{x + border, y + border, w - (border * 2), h - (border * 2)};
-	GdkRectangle f;
-	if (gdk_rectangle_intersect(&contracted_rect, &pb_rect, &f))
+	if (GdkRectangle f; gdk_rectangle_intersect(&contracted_rect, &pb_rect, &f))
 		{
-		pixbuf_draw_rect_fill(pb, f, r, g, b, a);
+		pixbuf_draw_rect_fill(pb, f, color);
 		}
 
 	if (border < 1) return;
 
 	// Draws linear gradients along each of the 4 edges.
-	const auto draw_fade_linear_if_intersect = [&pb_rect, p_pix, prs, has_alpha, border, r, g, b, a](GdkRectangle rect, gint s, gboolean vertical)
+	const auto draw_fade_linear_if_intersect = [&pb_rect, p_pix, prs, has_alpha, border, color](GdkRectangle rect, gint s, gboolean vertical)
 	{
 		GdkRectangle fade_rect;
 		if (!gdk_rectangle_intersect(&rect, &pb_rect, &fade_rect)) return;
 
 		pixbuf_draw_fade_linear(p_pix, prs, has_alpha,
 		                        s, vertical, border,
-		                        fade_rect,
-		                        r, g, b, a);
+		                        fade_rect, color);
 	};
 
 	draw_fade_linear_if_intersect({x, y + border, border, h - (border * 2)}, x + border, TRUE);
@@ -1436,15 +1165,14 @@ void pixbuf_draw_shadow(GdkPixbuf *pb, GdkRectangle clip,
 	draw_fade_linear_if_intersect({x + border, y + h - border, w - (border * 2), border}, y + h - border, FALSE);
 
 	// Draws radial gradients at each of the 4 corners.
-	const auto draw_fade_radius_if_intersect = [&pb_rect, p_pix, prs, has_alpha, border, r, g, b, a](GdkRectangle rect, gint sx, gint sy)
+	const auto draw_fade_radius_if_intersect = [&pb_rect, p_pix, prs, has_alpha, border, color](GdkRectangle rect, gint sx, gint sy)
 	{
 		GdkRectangle fade_rect;
 		if (!gdk_rectangle_intersect(&rect, &pb_rect, &fade_rect)) return;
 
 		pixbuf_draw_fade_radius(p_pix, prs, has_alpha,
 		                        sx, sy, border,
-		                        fade_rect,
-		                        r, g, b, a);
+		                        fade_rect, color);
 	};
 
 	draw_fade_radius_if_intersect({x, y, border, border}, x + border, y + border);
@@ -1546,6 +1274,7 @@ void pixbuf_desaturate_rect(GdkPixbuf *pb,
 	p_pix = gdk_pixbuf_get_pixels(pb);
 
 	const gint p_step = has_alpha ? 4 : 3;
+	constexpr GqColor full_red{ 255, 0, 0, 0 };
 
 	for (i = 0; i < h; i++)
 		{
@@ -1554,9 +1283,7 @@ void pixbuf_desaturate_rect(GdkPixbuf *pb,
 			{
 			if (pp[0] == 255 || pp[1] == 255 || pp[2] == 255 || pp[0] == 0 || pp[1] == 0 || pp[2] == 0)
 				{
-				pp[0] = 255;
-				pp[1] = 0;
-				pp[2] = 0;
+				pixel_set_color(pp, full_red, FALSE);
 				}
 			pp += p_step;
 			}

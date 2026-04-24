@@ -25,10 +25,12 @@
 #include <memory>
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
+#include <gdk/gdk.h>
 #include <glib-object.h>
 #include <glib.h>
 
 class FileData;
+struct GqSize;
 
 #define TYPE_IMAGE_LOADER		(image_loader_get_type())
 
@@ -37,11 +39,10 @@ struct ImageLoaderBackend
 public:
 	virtual ~ImageLoaderBackend() = default;
 
-	using AreaUpdatedCb = void (*)(gpointer, guint, guint, guint, guint, gpointer);
+	using AreaUpdatedCb = void (*)(gpointer, gint, gint, gint, gint, gpointer);
 	using SizePreparedCb = void (*)(gpointer, gint, gint, gpointer);
-	using AreaPreparedCb = void (*)(gpointer, gpointer);
 
-	virtual void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data) = 0;
+	virtual void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data) = 0;
 	virtual void set_size(int /*width*/, int /*height*/) {};
 	virtual gboolean write(const guchar *buf, gsize &chunk_size, gsize count, GError **error) = 0;
 	virtual GdkPixbuf *get_pixbuf() = 0;
@@ -110,10 +111,11 @@ struct ImageLoaderClass {
 	GObjectClass parent;
 
 	/* class members */
-	void (*area_ready)(ImageLoader *, guint x, guint y, guint w, guint h, gpointer);
+	void (*area_ready)(ImageLoader *, const GdkRectangle *area, gpointer);
 	void (*error)(ImageLoader *, gpointer);
 	void (*done)(ImageLoader *, gpointer);
 	void (*percent)(ImageLoader *, gdouble, gpointer);
+	void (*size_prepared)(ImageLoader *, const GqSize *size, gpointer);
 };
 
 GType image_loader_get_type();
@@ -138,9 +140,10 @@ gdouble image_loader_get_percent(ImageLoader *il);
 gboolean image_loader_get_is_done(ImageLoader *il);
 FileData *image_loader_get_fd(ImageLoader *il);
 gboolean image_loader_get_shrunk(ImageLoader *il);
-const gchar *image_loader_get_error(ImageLoader *il);
 
 gboolean image_load_dimensions(FileData *fd, gint *width, gint *height);
+
+void free_pixels(guchar *pixels, gpointer data);
 
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

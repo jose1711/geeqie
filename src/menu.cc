@@ -24,15 +24,14 @@
 #include <gdk/gdk.h>
 
 #include "collect-io.h"
-#include "collect-table.h"
-#include "collect.h"
 #include "editors.h"
+#include "image.h"
 #include "intl.h"
+#include "main-defines.h"
 #include "pixbuf-util.h"
+#include "sort-type.h"
 #include "ui-menu.h"
-
-static GtkWidget *real_submenu_add_alter(GtkWidget *menu, GCallback func, gpointer data,
-					 GtkAccelGroup *accel_group);
+#include "ui-misc.h"
 
 /*
  *-----------------------------------------------------------------------------
@@ -40,11 +39,12 @@ static GtkWidget *real_submenu_add_alter(GtkWidget *menu, GCallback func, gpoint
  *-----------------------------------------------------------------------------
  */
 
-gpointer submenu_item_get_data(GtkWidget *menu)
+gpointer submenu_item_get_data(GtkWidget *submenu_item)
 {
-	if (!gtk_widget_get_parent(menu) || !GTK_IS_MENU(gtk_widget_get_parent(menu))) return nullptr;
+	GtkWidget *submenu = gtk_widget_get_parent(submenu_item);
+	if (!submenu || !GTK_IS_MENU(submenu)) return nullptr;
 
-	return g_object_get_data(G_OBJECT(gtk_widget_get_parent(menu)), "submenu_data");
+	return g_object_get_data(G_OBJECT(submenu), "submenu_data");
 }
 
 /*
@@ -52,10 +52,6 @@ gpointer submenu_item_get_data(GtkWidget *menu)
  * edit menu
  *-----------------------------------------------------------------------------
  */
-static void edit_item_destroy_cb(GtkWidget *, gpointer data)
-{
-	g_free(data);
-}
 
 static void add_edit_items(GtkWidget *menu, GCallback func, GList *fd_list)
 {
@@ -74,19 +70,16 @@ static void add_edit_items(GtkWidget *menu, GCallback func, GList *fd_list)
 			}
 
 		GtkWidget *item = menu_item_add_stock(menu, editor->name, stock_id, func, key);
-		g_signal_connect(G_OBJECT(item), "destroy", G_CALLBACK(edit_item_destroy_cb), key);
+		g_signal_connect_swapped(G_OBJECT(item), "destroy", G_CALLBACK(g_free), key);
 		}
 }
 
-
-GtkWidget *submenu_add_edit(GtkWidget *menu, GtkWidget **menu_item, GCallback func, gpointer data, GList *fd_list)
+GtkWidget *submenu_add_edit(GtkWidget *menu, gboolean sensitive, GList *fd_list, GCallback func, gpointer data)
 {
-	GtkWidget *item;
 	GtkWidget *submenu;
 	GtkAccelGroup *accel_group;
 
 	accel_group = gtk_accel_group_new();
-	item = menu_item_add(menu, _("_Plugins"), nullptr, nullptr);
 
 	submenu = gtk_menu_new();
 	g_object_set_data(G_OBJECT(submenu), "submenu_data", data);
@@ -95,9 +88,9 @@ GtkWidget *submenu_add_edit(GtkWidget *menu, GtkWidget **menu_item, GCallback fu
 
 	add_edit_items(submenu, func, fd_list);
 
+	GtkWidget *item = menu_item_add(menu, _("_Plugins"), nullptr, nullptr);
 	gtk_menu_item_set_submenu(GTK_MENU_ITEM(item), submenu);
-
-	if (menu_item) *menu_item = item;
+	gtk_widget_set_sensitive(item, sensitive);
 
 	return submenu;
 }
@@ -108,198 +101,39 @@ GtkWidget *submenu_add_edit(GtkWidget *menu, GtkWidget **menu_item, GCallback fu
  *-----------------------------------------------------------------------------
  */
 
-gchar *sort_type_get_text(SortType method)
-{
-	switch (method)
-		{
-		case SORT_SIZE:
-			return _("Sort by size");
-			break;
-		case SORT_TIME:
-			return _("Sort by date");
-			break;
-		case SORT_CTIME:
-			return _("Sort by file creation date");
-			break;
-		case SORT_EXIFTIME:
-			return _("Sort by Exif date original");
-			break;
-		case SORT_EXIFTIMEDIGITIZED:
-			return _("Sort by Exif date digitized");
-			break;
-		case SORT_NONE:
-			return _("Unsorted");
-			break;
-		case SORT_PATH:
-			return _("Sort by path");
-			break;
-		case SORT_NUMBER:
-			return _("Sort by number");
-			break;
-		case SORT_RATING:
-			return _("Sort by rating");
-			break;
-		case SORT_CLASS:
-			return _("Sort by class");
-			break;
-		case SORT_NAME:
-		default:
-			return _("Sort by name");
-			break;
-		}
-
-	return nullptr;
-}
-
-static GtkWidget *submenu_add_sort_item(GtkWidget *menu,
-					GCallback func, SortType type,
-					gboolean show_current, SortType show_type)
-{
-	GtkWidget *item;
-
-	if (show_current)
-		{
-		item = menu_item_add_radio(menu,
-					   sort_type_get_text(type), GINT_TO_POINTER((gint)type), (type == show_type),
-					   func, GINT_TO_POINTER((gint)type));
-		}
-	else
-		{
-		item = menu_item_add(menu, sort_type_get_text(type),
-				     func, GINT_TO_POINTER((gint)type));
-		}
-
-	return item;
-}
-
 GtkWidget *submenu_add_sort(GtkWidget *menu, GCallback func, gpointer data,
-			    gboolean include_none, gboolean include_path,
-			    gboolean show_current, SortType type)
+                            gboolean show_current, SortType type)
 {
 	GtkWidget *submenu;
-
-	submenu = gtk_menu_new();
-	g_object_set_data(G_OBJECT(submenu), "submenu_data", data);
-
-	submenu_add_sort_item(submenu, func, SORT_NAME, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_NUMBER, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_TIME, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_CTIME, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_EXIFTIME, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_EXIFTIMEDIGITIZED, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_SIZE, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_RATING, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_CLASS, show_current, type);
-	if (include_path) submenu_add_sort_item(submenu, func, SORT_PATH, show_current, type);
-	if (include_none) submenu_add_sort_item(submenu, func, SORT_NONE, show_current, type);
 
 	if (menu)
-		{
-		GtkWidget *item;
-
-		item = menu_item_add(menu, _("Sort"), nullptr, nullptr);
-		gtk_menu_item_set_submenu(GTK_MENU_ITEM(item), submenu);
-		return item;
-		}
-
-	return submenu;
-}
-
-GtkWidget *submenu_add_dir_sort(GtkWidget *menu, GCallback func, gpointer data,
-			    gboolean include_none, gboolean include_path,
-			    gboolean show_current, SortType type)
-{
-	GtkWidget *submenu;
-
-	submenu = gtk_menu_new();
-	g_object_set_data(G_OBJECT(submenu), "submenu_data", data);
-
-	submenu_add_sort_item(submenu, func, SORT_NAME, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_NUMBER, show_current, type);
-	submenu_add_sort_item(submenu, func, SORT_TIME, show_current, type);
-	if (include_path) submenu_add_sort_item(submenu, func, SORT_PATH, show_current, type);
-	if (include_none) submenu_add_sort_item(submenu, func, SORT_NONE, show_current, type);
-
-	if (menu)
-		{
-		GtkWidget *item;
-
-		item = menu_item_add(menu, _("Sort"), nullptr, nullptr);
-		gtk_menu_item_set_submenu(GTK_MENU_ITEM(item), submenu);
-		return item;
-		}
-
-	return submenu;
-}
-
-static gchar *zoom_type_get_text(ZoomMode method)
-{
-	switch (method)
-		{
-		case ZOOM_RESET_ORIGINAL:
-			return _("Zoom to original size");
-			break;
-		case ZOOM_RESET_FIT_WINDOW:
-			return _("Fit image to window");
-			break;
-		case ZOOM_RESET_NONE:
-			return _("Leave Zoom at previous setting");
-			break;
-		default:
-			return _("Zoom to original size");
-			break;
-		}
-
-	return nullptr;
-}
-
-static GtkWidget *submenu_add_zoom_item(GtkWidget *menu,
-					GCallback func, ZoomMode mode,
-					gboolean show_current, ZoomMode show_mode)
-{
-	GtkWidget *item;
-
-	if (show_current)
-		{
-		item = menu_item_add_radio(menu,
-					   zoom_type_get_text(mode), GINT_TO_POINTER((gint)mode), (mode == show_mode),
-					   func, GINT_TO_POINTER((gint)mode));
-		}
-	else
-		{
-		item = menu_item_add(menu, zoom_type_get_text(mode),
-				     func, GINT_TO_POINTER((gint)mode));
-		}
-
-	return item;
-}
-
-GtkWidget *submenu_add_zoom(GtkWidget *menu, GCallback func, gpointer data,
-			    gboolean, gboolean, gboolean show_current, ZoomMode mode)
-{
-	GtkWidget *submenu;
-
-	if (!menu)
 		{
 		submenu = gtk_menu_new();
-		g_object_set_data(G_OBJECT(submenu), "submenu_data", data);
+
+		GtkWidget *item = menu_item_add(menu, _("_Sort"), nullptr, nullptr);
+		gtk_menu_item_set_submenu(GTK_MENU_ITEM(item), submenu);
 		}
 	else
 		{
-		submenu = menu;
+		submenu = popup_menu_short_lived();
 		}
 
-	submenu_add_zoom_item(submenu, func, ZOOM_RESET_ORIGINAL, show_current, mode);
-	submenu_add_zoom_item(submenu, func, ZOOM_RESET_FIT_WINDOW, show_current, mode);
-	submenu_add_zoom_item(submenu, func, ZOOM_RESET_NONE, show_current, mode);
+	if (!show_current) g_object_set_data(G_OBJECT(submenu), "submenu_data", data);
 
-	if (menu)
+	for (const SortType sort_type : { SORT_NAME, SORT_NUMBER, SORT_TIME, SORT_CTIME, SORT_EXIFTIME,
+	                                  SORT_EXIFTIMEDIGITIZED, SORT_SIZE, SORT_RATING, SORT_CLASS })
 		{
-		GtkWidget *item;
-
-		item = menu_item_add(menu, _("Zoom"), nullptr, nullptr);
-		gtk_menu_item_set_submenu(GTK_MENU_ITEM(item), submenu);
-		return item;
+		if (show_current)
+			{
+			menu_item_add_radio(submenu, sort_type_get_text(sort_type),
+			                    GINT_TO_POINTER(sort_type), sort_type == type,
+			                    func, data);
+			}
+		else
+			{
+			menu_item_add(submenu, sort_type_get_text(sort_type),
+			              func, GINT_TO_POINTER(sort_type));
+			}
 		}
 
 	return submenu;
@@ -311,7 +145,7 @@ GtkWidget *submenu_add_zoom(GtkWidget *menu, GCallback func, gpointer data,
  *-----------------------------------------------------------------------------
  */
 
-gchar *alter_type_get_text(AlterType type)
+static const gchar *alter_type_get_text(AlterType type)
 {
 	switch (type)
 		{
@@ -341,26 +175,20 @@ gchar *alter_type_get_text(AlterType type)
 }
 
 static void submenu_add_alter_item(GtkWidget *menu, GCallback func, AlterType type,
-				   GtkAccelGroup *accel_group, guint accel_key, guint accel_mods)
+                                   GtkAccelGroup *accel_group, guint accel_key, guint accel_mods)
 {
-	if (accel_group)
-		{
-		GtkWidget *item = menu_item_add_simple(menu, alter_type_get_text(type), func, GINT_TO_POINTER((gint)type));
-		gtk_widget_add_accelerator(item, "activate", accel_group, accel_key, static_cast<GdkModifierType>(accel_mods), GTK_ACCEL_VISIBLE);
-		}
-	else
-		{
-		menu_item_add(menu, alter_type_get_text(type), func, GINT_TO_POINTER((gint)type));
-		}
+	GtkWidget *item = menu_item_add_simple(menu, alter_type_get_text(type), func, GINT_TO_POINTER(type));
+	gtk_widget_add_accelerator(item, "activate", accel_group, accel_key, static_cast<GdkModifierType>(accel_mods), GTK_ACCEL_VISIBLE);
 }
 
-static GtkWidget *real_submenu_add_alter(GtkWidget *menu, GCallback func, gpointer data,
-					 GtkAccelGroup *accel_group)
+GtkWidget *submenu_add_alter(GtkWidget *menu, GCallback func, gpointer data)
 {
 	GtkWidget *submenu;
 
 	submenu = gtk_menu_new();
 	g_object_set_data(G_OBJECT(submenu), "submenu_data", data);
+
+	GtkAccelGroup *accel_group = gtk_accel_group_new();
 
 	submenu_add_alter_item(submenu, func, ALTER_ROTATE_90, accel_group, ']', 0);
 	submenu_add_alter_item(submenu, func, ALTER_ROTATE_90_CC, accel_group, '[', 0);
@@ -381,14 +209,6 @@ static GtkWidget *real_submenu_add_alter(GtkWidget *menu, GCallback func, gpoint
 	return submenu;
 }
 
-GtkWidget *submenu_add_alter(GtkWidget *menu, GCallback func, gpointer data)
-{
-	GtkAccelGroup *accel;
-
-	accel = gtk_accel_group_new();
-	return real_submenu_add_alter(menu, func, data, accel); //last accel gr
-}
-
 /*
  *-----------------------------------------------------------------------------
  * collections
@@ -398,84 +218,111 @@ GtkWidget *submenu_add_alter(GtkWidget *menu, GCallback func, gpointer data)
 /**
  * @brief Add submenu consisting of "New collection", and list of existing collections to a right-click menu.
  * @param[in] menu
+ * @param[in] sensitive
  * @param[in] func
- * @param[in] collection_list Type gchar
  * @param[in] data
  *
  *  Used by all image windows
  */
-static void add_collection_list(GtkWidget *menu, GCallback func, GList *collection_list, gpointer)
+GtkWidget *submenu_add_collections(GtkWidget *menu, gboolean sensitive,
+                                   GCallback func, gpointer data)
 {
-	GList *work;
-	gint index = 0; /* index to existing collection list menu item selected */
-
-	work = collection_list;
-	while (work)
-		{
-		auto collection_name = static_cast<const gchar *>(work->data);
-
-		menu_item_add(menu, collection_name, func,
-													GINT_TO_POINTER(index));
-		work = work->next;
-		index++;
-		}
-}
-
-GtkWidget *submenu_add_collections(GtkWidget *menu, GtkWidget **menu_item,
-										GCallback func, gpointer data)
-{
-	GtkWidget *item;
 	GtkWidget *submenu;
 	GList *collection_list = nullptr;
-
-	item = menu_item_add(menu, _("_Add to Collection"), nullptr, nullptr);
 
 	submenu = gtk_menu_new();
 	g_object_set_data(G_OBJECT(submenu), "submenu_data", data);
 
-	menu_item_add_icon_sensitive(submenu, _("New collection"),
-	                             PIXBUF_INLINE_COLLECTION, TRUE, G_CALLBACK(func), GINT_TO_POINTER(-1));
+	menu_item_add_icon_sensitive(submenu, _("New collection"), PIXBUF_INLINE_COLLECTION,
+	                             TRUE, G_CALLBACK(func), GINT_TO_POINTER(-1));
 	menu_item_add_divider(submenu);
 
 	collect_manager_list(&collection_list,nullptr,nullptr);
-	add_collection_list(submenu, func, collection_list, data);
 
+	gint index = 0; /* index to existing collection list menu item selected */
+	for (GList *work = collection_list; work; work = work->next, index++)
+		{
+		auto *collection_name = static_cast<gchar *>(work->data);
+		menu_item_add(submenu, collection_name, func, GINT_TO_POINTER(index));
+		}
+
+	GtkWidget *item = menu_item_add(menu, _("_Add to Collection"), nullptr, nullptr);
 	gtk_menu_item_set_submenu(GTK_MENU_ITEM(item), submenu);
-	if (menu_item) *menu_item = item;
+	gtk_widget_set_sensitive(item, sensitive);
 
-	g_list_free(collection_list);
+	g_list_free_full(collection_list, g_free);
 
 	return submenu;
 }
 
+/*
+ *-----------------------------------------------------------------------------
+ * bar
+ *-----------------------------------------------------------------------------
+ */
+
 /**
- * @brief Add file selection list to a collection
- * @param[in] selection_list Selection list of ::_FileData
- * @param[in] data Index to the collection list menu item selected, or -1 for new collection
- *
+ * @brief
+ * @param widget Not used
+ * @param data Pointer to vbox item
+ * @param up Up/Down movement
+ * @param single_step Move up/down one step, or to top/bottom
  *
  */
-void pop_menu_collections(GList *selection_list, gpointer data)
+template<gboolean up, gboolean single_step>
+static void widget_move_cb(GtkWidget *, gpointer data)
 {
-	CollectWindow *cw;
-	gchar *collection_name;
-	GList *collection_list = nullptr;
-	const gint index = GPOINTER_TO_INT(data);
+	auto *widget = static_cast<GtkWidget *>(data);
+	if (!widget) return;
 
-	if (index >= 0)
+	GtkWidget *box = gtk_widget_get_ancestor(widget, GTK_TYPE_BOX);
+	if (!box) return;
+
+	gint pos = 0;
+	gtk_container_child_get(GTK_CONTAINER(box), widget, "position", &pos, NULL);
+
+	if (single_step)
 		{
-		collect_manager_list(&collection_list, nullptr, nullptr);
-		collection_name = static_cast<gchar *>(g_list_nth_data(collection_list, index));
-		g_autofree gchar *name = collection_path(collection_name);
-		cw = collection_window_new(name);
-		g_list_free_full(collection_list, g_free);
+		pos = up ? (pos - 1) : (pos + 1);
+		pos = std::max(pos, 0);
 		}
 	else
 		{
-		cw = collection_window_new(nullptr);
+		pos = up ? 0 : -1;
 		}
 
-	collection_table_add_filelist(cw->table, selection_list);
+	gtk_box_reorder_child(GTK_BOX(box), widget, pos);
+}
+
+void popup_menu_bar(GtkWidget *widget, GCallback expander_height_cb)
+{
+	GtkWidget *menu = popup_menu_short_lived();
+
+	if (widget)
+		{
+		menu_item_add_icon(menu, _("Move to _top"), GQ_ICON_GO_TOP,
+		                   (GCallback)widget_move_cb<TRUE, FALSE>, widget);
+		menu_item_add_icon(menu, _("Move _up"), GQ_ICON_GO_UP,
+		                   (GCallback)widget_move_cb<TRUE, TRUE>, widget);
+		menu_item_add_icon(menu, _("Move _down"), GQ_ICON_GO_DOWN,
+		                   (GCallback)widget_move_cb<FALSE, TRUE>, widget);
+		menu_item_add_icon(menu, _("Move to _bottom"), GQ_ICON_GO_BOTTOM,
+		                   (GCallback)widget_move_cb<FALSE, FALSE>, widget);
+		menu_item_add_divider(menu);
+
+		if (expander_height_cb && gtk_expander_get_expanded(GTK_EXPANDER(widget)))
+			{
+			menu_item_add_icon(menu, _("Height…"), GQ_ICON_PREFERENCES,
+			                   G_CALLBACK(expander_height_cb), widget);
+			menu_item_add_divider(menu);
+			}
+
+		menu_item_add_icon(menu, _("Remove"), GQ_ICON_DELETE,
+		                   G_CALLBACK(widget_remove_from_parent_cb), widget);
+		menu_item_add_divider(menu);
+		}
+
+	gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
 }
 
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

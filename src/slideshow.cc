@@ -22,8 +22,8 @@
 #include "slideshow.h"
 
 #include <algorithm>
-#include <cstdlib>
-#include <utility>
+#include <numeric>
+#include <random>
 
 #include "collect.h"
 #include "filedata.h"
@@ -32,188 +32,99 @@
 #include "layout.h"
 #include "options.h"
 
-static void slideshow_timer_stop(SlideShowData *ss);
-
-
-void slideshow_free(SlideShowData *ss)
+namespace
 {
-	if (!ss) return;
 
-	slideshow_timer_stop(ss);
-
-	if (ss->stop_func) ss->stop_func(ss, ss->stop_data);
-
-	if (ss->filelist) file_data_list_free(ss->filelist);
-	if (ss->cd) collection_unref(ss->cd);
-	file_data_unref(ss->dir_fd);
-
-	g_list_free(ss->list);
-	g_list_free(ss->list_done);
-
-	file_data_unref(ss->slide_fd);
-
-	g_free(ss);
+void move_first_list_item(std::deque<gint> &src, std::deque<gint> &dst)
+{
+	dst.push_front(src.front());
+	src.pop_front();
 }
 
-static GList *generate_list(SlideShowData *ss)
+inline FileData *slideshow_get_fd(const SlideShow *ss)
 {
-	GList *list = nullptr;
+	return ss->lw ? layout_image_get_fd(ss->lw) : image_get_fd(ss->imd);
+}
+
+} // namespace
+
+SlideShow::~SlideShow()
+{
+	g_clear_handle_id(&timeout_id, g_source_remove);
+
+	if (stop_func) stop_func(this);
+
+	if (filelist) file_data_list_free(filelist);
+	if (cd) collection_unref(cd);
+	file_data_unref(dir_fd);
+
+	file_data_unref(slide_fd);
+}
+
+static void slideshow_list_init(SlideShow *ss, gint start_index)
+{
+	ss->list_done.clear();
+	ss->list.clear();
 
 	if (ss->from_selection)
 		{
-		list = layout_selection_list_by_index(ss->lw);
+		const std::vector<int> list = layout_selection_list_by_index(ss->lw);
+
+		std::copy(list.cbegin(), list.cend(), std::back_inserter(ss->list));
 		}
 	else
 		{
-		guint i;
-		for (i = 0; i < ss->slide_count; i++)
-			{
-			list = g_list_prepend(list, GINT_TO_POINTER(i));
-			}
-		list = g_list_reverse(list);
+		ss->list.resize(ss->slide_count);
+		std::iota(ss->list.begin(), ss->list.end(), 0);
 		}
-
-	return list;
-}
-
-static GPtrArray *generate_ptr_array_from_list(GList *src_list)
-{
-	GPtrArray *arr = g_ptr_array_sized_new(g_list_length(src_list));
-
-	static const auto ptr_array_add = [](gpointer data, gpointer user_data)
-	{
-		auto *array = static_cast<GPtrArray *>(user_data);
-		g_ptr_array_add(array, data);
-	};
-
-	g_list_foreach(src_list, ptr_array_add, arr);
-
-	return arr;
-}
-
-static void ptr_array_random_shuffle(GPtrArray *array)
-{
-	guint i;
-	for (i = 0; i < array->len; ++i)
-		{
-		guint p = static_cast<double>(rand()) / (static_cast<double>(RAND_MAX) + 1.0) * array->len;
-		std::swap(g_ptr_array_index(array, i), g_ptr_array_index(array, p));
-		}
-}
-
-static GList *generate_random_list(SlideShowData *ss)
-{
-	GList *src_list;
-	GPtrArray *src_array;
-	GList *list = nullptr;
-
-	src_list = generate_list(ss);
-	src_array = generate_ptr_array_from_list(src_list);
-	g_list_free(src_list);
-
-	static const auto list_prepend = [](gpointer data, gpointer user_data)
-	{
-		auto list = static_cast<GList **>(user_data);
-		*list = g_list_prepend(*list, data);
-	};
-
-	ptr_array_random_shuffle(src_array);
-	g_ptr_array_foreach(src_array, list_prepend, &list);
-	g_ptr_array_free(src_array, TRUE);
-
-	return list;
-}
-
-static void slideshow_list_init(SlideShowData *ss, gint start_index)
-{
-	g_list_free(ss->list_done);
-	ss->list_done = nullptr;
-
-	g_list_free(ss->list);
 
 	if (options->slideshow.random)
 		{
-		ss->list = generate_random_list(ss);
+		std::shuffle(ss->list.begin(), ss->list.end(), std::mt19937{std::random_device{}()});
 		}
-	else
+	else if (start_index > 0)
 		{
-		ss->list = generate_list(ss);
-		if (start_index >= 0)
+		/* start with specified image by skipping to it */
+		const auto n = std::min<gint>(ss->list.size(), start_index);
+		for (gint i = 0; i < n; i++)
 			{
-			/* start with specified image by skipping to it */
-			gint i = 0;
-
-			while (ss->list && i < start_index)
-				{
-				ss->list_done = g_list_prepend(ss->list_done, ss->list->data);
-				ss->list = g_list_remove(ss->list, ss->list->data);
-				i++;
-				}
+			move_first_list_item(ss->list, ss->list_done);
 			}
 		}
 }
 
-gboolean slideshow_should_continue(SlideShowData *ss)
+bool SlideShow::should_continue() const
 {
-	FileData *imd_fd;
-	FileData *dir_fd;
+	if (slide_fd != slideshow_get_fd(this)) return false;
 
-	if (!ss) return FALSE;
+	if (filelist) return true;
 
-	if (ss->lw)
-		imd_fd = layout_image_get_fd(ss->lw);
-	else
-		imd_fd = image_get_fd(ss->imd);
+	if (cd) return g_list_length(cd->list) == slide_count;
 
-	if ( ((imd_fd == nullptr) != (ss->slide_fd == nullptr)) ||
-	    (imd_fd && ss->slide_fd && imd_fd != ss->slide_fd) ) return FALSE;
+	if (!dir_fd || !lw->dir_fd || dir_fd != lw->dir_fd) return false;
 
-	if (ss->filelist) return TRUE;
-
-	if (ss->cd)
-		{
-		if (g_list_length(ss->cd->list) == ss->slide_count)
-			return TRUE;
-
-		return FALSE;
-		}
-
-	dir_fd = ss->lw->dir_fd;
-
-	if (dir_fd && ss->dir_fd && dir_fd == ss->dir_fd)
-		{
-		if (ss->from_selection && ss->slide_count == layout_selection_count(ss->lw, nullptr)) return TRUE;
-		if (!ss->from_selection && ss->slide_count == layout_list_count(ss->lw, nullptr)) return TRUE;
-		}
-
-	return FALSE;
+	return (from_selection && slide_count == layout_selection_count(lw)) ||
+	       (!from_selection && slide_count == layout_list_count(lw));
 }
 
-static gboolean slideshow_step(SlideShowData *ss, gboolean forward)
+static gboolean slideshow_step(SlideShow *ss, gboolean forward)
 {
-	gint row;
-
-	if (!slideshow_should_continue(ss))
-		{
-		return FALSE;
-		}
+	if (!ss->should_continue()) return FALSE;
 
 	if (forward)
 		{
-		if (!ss->list) return TRUE;
+		if (ss->list.empty()) return TRUE;
 
-		row = GPOINTER_TO_INT(ss->list->data);
-		ss->list_done = g_list_prepend(ss->list_done, ss->list->data);
-		ss->list = g_list_remove(ss->list, ss->list->data);
+		move_first_list_item(ss->list, ss->list_done);
 		}
 	else
 		{
-		if (!ss->list_done || !ss->list_done->next) return TRUE;
+		if (ss->list_done.size() <= 1) return TRUE;
 
-		ss->list = g_list_prepend(ss->list, ss->list_done->data);
-		ss->list_done = g_list_remove(ss->list_done, ss->list_done->data);
-		row = GPOINTER_TO_INT(ss->list_done->data);
+		move_first_list_item(ss->list_done, ss->list);
 		}
+
+	gint row = ss->list_done.front();
 
 	file_data_unref(ss->slide_fd);
 	ss->slide_fd = nullptr;
@@ -233,10 +144,8 @@ static gboolean slideshow_step(SlideShowData *ss, gboolean forward)
 		info = static_cast<CollectInfo *>(g_list_nth_data(ss->cd->list, row));
 		ss->slide_fd = file_data_ref(info->fd);
 
-		if (ss->lw)
-			image_change_from_collection(ss->lw->image, ss->cd, info, image_zoom_get_default(ss->lw->image));
-		else
-			image_change_from_collection(ss->imd, ss->cd, info, image_zoom_get_default(ss->imd));
+		ImageWindow *imd = ss->lw ? ss->lw->image : ss->imd;
+		image_change_from_collection(imd, ss->cd, info, image_zoom_get_default(imd));
 		}
 	else
 		{
@@ -253,12 +162,12 @@ static gboolean slideshow_step(SlideShowData *ss, gboolean forward)
 			}
 		}
 
-	if (!ss->list && options->slideshow.repeat)
+	if (ss->list.empty() && options->slideshow.repeat)
 		{
 		slideshow_list_init(ss, -1);
 		}
 
-	if (!ss->list)
+	if (ss->list.empty())
 		{
 		return FALSE;
 		}
@@ -269,12 +178,12 @@ static gboolean slideshow_step(SlideShowData *ss, gboolean forward)
 		gint r;
 		if (forward)
 			{
-			r = GPOINTER_TO_INT(ss->list->data);
+			r = ss->list.front();
 			}
 		else
 			{
-			if (!ss->list_done || !ss->list_done->next) return TRUE;
-			r = GPOINTER_TO_INT(ss->list_done->next->data);
+			if (ss->list_done.size() <= 1) return TRUE;
+			r = ss->list_done[1];
 			}
 
 		if (ss->filelist)
@@ -296,11 +205,11 @@ static gboolean slideshow_step(SlideShowData *ss, gboolean forward)
 	return TRUE;
 }
 
-static void slideshow_timer_reset(SlideShowData *ss);
+static void slideshow_timer_reset(SlideShow *ss);
 
 static gboolean slideshow_loop_cb(gpointer data)
 {
-	auto ss = static_cast<SlideShowData *>(data);
+	auto *ss = static_cast<SlideShow *>(data);
 
 	if (ss->paused) return G_SOURCE_CONTINUE;
 
@@ -312,20 +221,11 @@ static gboolean slideshow_loop_cb(gpointer data)
 		return G_SOURCE_CONTINUE;
 		}
 
-	ss->timeout_id = 0;
-	slideshow_free(ss);
+	delete ss;
 	return G_SOURCE_REMOVE;
 }
 
-static void slideshow_timer_stop(SlideShowData *ss)
-{
-	if (!ss->timeout_id) return;
-
-	g_source_remove(ss->timeout_id);
-	ss->timeout_id = 0;
-}
-
-static void slideshow_timer_reset(SlideShowData *ss)
+static void slideshow_timer_reset(SlideShow *ss)
 {
 	options->slideshow.delay = std::max(options->slideshow.delay, 1);
 
@@ -334,138 +234,119 @@ static void slideshow_timer_reset(SlideShowData *ss)
 				       slideshow_loop_cb, ss);
 }
 
-static void slideshow_move(SlideShowData *ss, gboolean forward)
+static void slideshow_move(SlideShow *ss, gboolean forward)
 {
-	if (!ss) return;
-
 	if (!slideshow_step(ss, forward))
 		{
-		slideshow_free(ss);
+		delete ss;
 		return;
 		}
 
 	slideshow_timer_reset(ss);
 }
 
-void slideshow_next(SlideShowData *ss)
+void SlideShow::next()
 {
-	slideshow_move(ss, TRUE);
+	slideshow_move(this, TRUE);
 }
 
-void slideshow_prev(SlideShowData *ss)
+void SlideShow::prev()
 {
-	slideshow_move(ss, FALSE);
+	slideshow_move(this, FALSE);
 }
 
-static SlideShowData *real_slideshow_start(LayoutWindow *target_lw, ImageWindow *imd,
-					   GList *filelist, gint start_point,
-					   CollectionData *cd, CollectInfo *start_info,
-					   void (*stop_func)(SlideShowData *, gpointer), gpointer stop_data)
+static SlideShow *slideshow_start_real(SlideShow *ss, gint start_index,
+                                       const SlideShow::StopFunc &stop_func)
 {
-	SlideShowData *ss;
-	gint start_index = -1;
-
-	if (!filelist && !cd && layout_list_count(target_lw, nullptr) < 1) return nullptr;
-
-	ss = g_new0(SlideShowData, 1);
-
-	ss->lw = target_lw;
-	ss->imd = imd; /** @FIXME ss->imd is used only for img-view.cc and can be dropped with it */
-	ss->filelist = filelist;
-	ss->cd = cd;
-
-	if (ss->filelist)
-		{
-		ss->slide_count = g_list_length(ss->filelist);
-		}
-	else if (ss->cd)
-		{
-		collection_ref(ss->cd);
-		ss->slide_count = g_list_length(ss->cd->list);
-		if (!options->slideshow.random && start_info)
-			{
-			start_index = g_list_index(ss->cd->list, start_info);
-			}
-		}
-	else
-		{
-		/* layout method */
-
-		ss->slide_count = layout_selection_count(ss->lw, nullptr);
-		ss->dir_fd = file_data_ref(ss->lw->dir_fd);
-		if (ss->slide_count < 2)
-			{
-			ss->slide_count = layout_list_count(ss->lw, nullptr);
-			if (!options->slideshow.random && start_point >= 0 && static_cast<guint>(start_point) < ss->slide_count)
-				{
-				start_index = start_point;
-				}
-			}
-		else
-			{
-			ss->from_selection = TRUE;
-			}
-		}
-
 	slideshow_list_init(ss, start_index);
 
-	if (ss->lw)
-		ss->slide_fd = file_data_ref(layout_image_get_fd(ss->lw));
-	else
-		ss->slide_fd = file_data_ref(image_get_fd(ss->imd));
+	ss->slide_fd = file_data_ref(slideshow_get_fd(ss));
 
-	if (slideshow_step(ss, TRUE))
+	if (!slideshow_step(ss, TRUE))
 		{
-		slideshow_timer_reset(ss);
+		delete ss;
+		return nullptr;
+		}
 
-		ss->stop_func = stop_func;
-		ss->stop_data = stop_data;
-		}
-	else
-		{
-		slideshow_free(ss);
-		ss = nullptr;
-		}
+	slideshow_timer_reset(ss);
+
+	ss->stop_func = stop_func;
 
 	return ss;
 }
 
-SlideShowData *slideshow_start_from_filelist(LayoutWindow *target_lw, ImageWindow *imd, GList *list,
-					      void (*stop_func)(SlideShowData *, gpointer), gpointer stop_data)
+SlideShow *SlideShow::start_from_filelist(LayoutWindow *target_lw, ImageWindow *imd,
+                                          GList *list, const StopFunc &stop_func)
 {
-	return real_slideshow_start(target_lw, imd, list, -1, nullptr, nullptr, stop_func, stop_data);
+	if (!list) return nullptr;
+
+	auto *ss = new SlideShow(target_lw, imd);
+	ss->filelist = list;
+	ss->slide_count = g_list_length(ss->filelist);
+
+	return slideshow_start_real(ss, -1, stop_func);
 }
 
-SlideShowData *slideshow_start_from_collection(LayoutWindow *target_lw, ImageWindow *imd, CollectionData *cd,
-					       void (*stop_func)(SlideShowData *, gpointer), gpointer stop_data,
-					       CollectInfo *start_info)
+SlideShow *SlideShow::start_from_collection(LayoutWindow *target_lw, ImageWindow *imd,
+                                            CollectionData *cd, CollectInfo *start_info,
+                                            const StopFunc &stop_func)
 {
-	return real_slideshow_start(target_lw, imd, nullptr, -1, cd, start_info, stop_func, stop_data);
+	if (!cd) return nullptr;
+
+	auto *ss = new SlideShow(target_lw, imd);
+	ss->cd = collection_ref(cd);
+	ss->slide_count = g_list_length(ss->cd->list);
+
+	return slideshow_start_real(ss, (!options->slideshow.random && start_info) ?
+	                                g_list_index(ss->cd->list, start_info) : -1,
+	                            stop_func);
 }
 
-SlideShowData *slideshow_start(LayoutWindow *lw, gint start_point,
-			       void (*stop_func)(SlideShowData *, gpointer), gpointer stop_data)
+SlideShow *SlideShow::start(LayoutWindow *lw, const StopFunc &stop_func)
 {
-	return real_slideshow_start(lw, nullptr, nullptr, start_point, nullptr, nullptr, stop_func, stop_data);
+	const guint list_count = layout_list_count(lw);
+	if (list_count < 1) return nullptr;
+
+	auto *ss = new SlideShow(lw, nullptr);
+	ss->dir_fd = file_data_ref(ss->lw->dir_fd);
+
+	const guint selection_count = layout_selection_count(ss->lw);
+	ss->from_selection = (selection_count >= 2);
+
+	gint start_index = -1;
+	if (ss->from_selection)
+		{
+		ss->slide_count = selection_count;
+		}
+	else
+		{
+		ss->slide_count = list_count;
+		if (!options->slideshow.random)
+			{
+			const gint start_point = layout_list_get_index(lw, layout_image_get_fd(lw));
+			if (start_point >= 0 && static_cast<guint>(start_point) < ss->slide_count)
+				{
+				start_index = start_point;
+				}
+			}
+		}
+
+	return slideshow_start_real(ss, start_index, stop_func);
 }
 
-gboolean slideshow_paused(SlideShowData *ss)
+void SlideShow::get_index_and_total(gint &index, gint &total) const
 {
-	if (!ss) return FALSE;
-
-	return ss->paused;
+	index = list_done.empty() ? list.size() : list_done.size();
+	total = list_done.size() + list.size();
 }
 
-void slideshow_pause_set(SlideShowData *ss, gboolean paused)
+gboolean SlideShow::is_paused() const
 {
-	if (!ss) return;
-
-	ss->paused = paused;
+	return paused;
 }
 
-gboolean slideshow_pause_toggle(SlideShowData *ss)
+void SlideShow::pause_toggle()
 {
-	slideshow_pause_set(ss, !slideshow_paused(ss));
-	return slideshow_paused(ss);
+	paused = !paused;
 }
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

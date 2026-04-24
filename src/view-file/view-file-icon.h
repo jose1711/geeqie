@@ -26,7 +26,6 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
 #include "view-file.h"
 
 class FileData;
@@ -59,8 +58,10 @@ gboolean vficon_release_cb(ViewFile *vf, GtkWidget *widget, GdkEventButton *beve
 
 FileData *vficon_find_data_by_coord(ViewFile *vf, gint x, gint y, GtkTreeIter *iter);
 
+#if !HAVE_GTK4
 void vficon_dnd_begin(ViewFile *vf, GtkWidget *widget, GdkDragContext *context);
 void vficon_dnd_end(ViewFile *vf, GdkDragContext *context);
+#endif
 
 void vficon_destroy_cb(ViewFile *vf);
 ViewFile *vficon_new(ViewFile *vf);
@@ -70,7 +71,7 @@ gboolean vficon_refresh(ViewFile *vf);
 
 
 void vficon_marks_set(ViewFile *vf, gboolean enable);
-void vficon_sort_set(ViewFile *vf, SortType type, gboolean ascend, gboolean case_sensitive);
+void vficon_sort_set(ViewFile *vf, FileData::FileList::SortSettings settings);
 
 GList *vficon_selection_get_one(ViewFile *vf, FileData *fd);
 void vficon_pop_menu_rename_cb(ViewFile *vf);
@@ -84,7 +85,7 @@ gint vficon_index_by_fd(const ViewFile *vf, const FileData *fd);
 gboolean vficon_is_selected(ViewFile *vf, FileData *fd);
 guint vficon_selection_count(ViewFile *vf, gint64 *bytes);
 GList *vficon_selection_get_list(ViewFile *vf);
-GList *vficon_selection_get_list_by_index(ViewFile *vf);
+std::vector<int> vficon_selection_get_list_by_index(const ViewFile *vf);
 void vficon_selection_foreach(ViewFile *vf, const ViewFile::SelectionCallback &func);
 
 void vficon_select_all(ViewFile *vf);

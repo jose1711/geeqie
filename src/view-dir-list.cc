@@ -32,7 +32,6 @@
 #include "filedata.h"
 #include "layout.h"
 #include "options.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 #include "ui-tree-edit.h"
 #include "view-dir.h"
@@ -108,21 +107,17 @@ FileData *vdlist_row_by_path(ViewDir *vd, const gchar *path, gint *row)
 
 static void vdlist_scroll_to_row(ViewDir *vd, FileData *fd, gfloat y_align)
 {
+	if (!gtk_widget_get_realized(vd->view)) return;
+
 	GtkTreeIter iter;
+	if (!vd_find_row(vd, fd, &iter)) return;
 
-	if (gtk_widget_get_realized(vd->view) && vd_find_row(vd, fd, &iter))
-		{
-		GtkTreeModel *store;
-		GtkTreePath *tpath;
+	GtkTreeModel *store = gtk_tree_view_get_model(GTK_TREE_VIEW(vd->view));
+	g_autoptr(GtkTreePath) tpath = gtk_tree_model_get_path(store, &iter);
+	gtk_tree_view_scroll_to_cell(GTK_TREE_VIEW(vd->view), tpath, nullptr, TRUE, y_align, 0.0);
+	gtk_tree_view_set_cursor(GTK_TREE_VIEW(vd->view), tpath, nullptr, FALSE);
 
-		store = gtk_tree_view_get_model(GTK_TREE_VIEW(vd->view));
-		tpath = gtk_tree_model_get_path(store, &iter);
-		gtk_tree_view_scroll_to_cell(GTK_TREE_VIEW(vd->view), tpath, nullptr, TRUE, y_align, 0.0);
-		gtk_tree_view_set_cursor(GTK_TREE_VIEW(vd->view), tpath, nullptr, FALSE);
-		gtk_tree_path_free(tpath);
-
-		if (!gtk_widget_has_focus(vd->view)) gtk_widget_grab_focus(vd->view);
-		}
+	if (!gtk_widget_has_focus(vd->view)) gtk_widget_grab_focus(vd->view);
 }
 
 /*
@@ -140,21 +135,12 @@ static gboolean vdlist_populate(ViewDir *vd, gboolean clear)
 	GList *old_list;
 	gboolean ret;
 	FileData *fd;
-	SortType sort_type = SORT_NAME;
-	gboolean sort_ascend = TRUE;
-	gboolean sort_case = TRUE;
-
-	if (vd->layout)
-		{
-		sort_type = vd->layout->options.dir_view_list_sort.method;
-		sort_ascend = vd->layout->options.dir_view_list_sort.ascend;
-		sort_case = vd->layout->options.dir_view_list_sort.case_sensitive;
-		}
+	const auto settings = vd->layout ? vd->layout->options.dir_view_list_sort : FileData::FileList::SortSettings{ SORT_NAME, TRUE, TRUE };
 
 	old_list = VDLIST(vd)->list;
 
 	ret = filelist_read(vd->dir_fd, nullptr, &VDLIST(vd)->list);
-	VDLIST(vd)->list = filelist_sort(VDLIST(vd)->list, sort_type, sort_ascend, sort_case);
+	VDLIST(vd)->list = filelist_sort(VDLIST(vd)->list, settings);
 
 	/* add . and .. */
 
@@ -233,7 +219,7 @@ static gboolean vdlist_populate(ViewDir *vd, gboolean clear)
 					}
 				else
 					{
-					match = filelist_sort_compare_filedata_full(fd, old_fd, sort_type, sort_ascend);
+					match = filelist_sort_compare_filedata_full(fd, old_fd, settings.method, settings.ascending);
 
 					if (match == 0) g_warning("multiple fd for the same path");
 					}
@@ -357,10 +343,10 @@ void vdlist_refresh(ViewDir *vd)
 gboolean vdlist_press_key_cb(GtkWidget *widget, GdkEventKey *event, gpointer data)
 {
 	auto vd = static_cast<ViewDir *>(data);
-	GtkTreePath *tpath;
 
 	if (event->keyval != GDK_KEY_Menu) return FALSE;
 
+	g_autoptr(GtkTreePath) tpath = nullptr;
 	gtk_tree_view_get_cursor(GTK_TREE_VIEW(vd->view), &tpath, nullptr);
 	if (tpath)
 		{
@@ -370,8 +356,6 @@ gboolean vdlist_press_key_cb(GtkWidget *widget, GdkEventKey *event, gpointer dat
 		store = gtk_tree_view_get_model(GTK_TREE_VIEW(widget));
 		gtk_tree_model_get_iter(store, &iter, tpath);
 		gtk_tree_model_get(store, &iter, DIR_COLUMN_POINTER, &vd->click_fd, -1);
-
-		gtk_tree_path_free(tpath);
 		}
 	else
 		{
@@ -390,12 +374,12 @@ gboolean vdlist_press_key_cb(GtkWidget *widget, GdkEventKey *event, gpointer dat
 gboolean vdlist_press_cb(GtkWidget *widget, GdkEventButton *bevent, gpointer data)
 {
 	auto vd = static_cast<ViewDir *>(data);
-	GtkTreePath *tpath;
 	GtkTreeIter iter;
 	FileData *fd = nullptr;
 
-	if (gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(widget), bevent->x, bevent->y,
-					  &tpath, nullptr, nullptr, nullptr))
+	if (g_autoptr(GtkTreePath) tpath = nullptr;
+	    gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(widget), bevent->x, bevent->y,
+	                                  &tpath, nullptr, nullptr, nullptr))
 		{
 		GtkTreeModel *store;
 
@@ -403,7 +387,6 @@ gboolean vdlist_press_cb(GtkWidget *widget, GdkEventButton *bevent, gpointer dat
 		gtk_tree_model_get_iter(store, &iter, tpath);
 		gtk_tree_model_get(store, &iter, DIR_COLUMN_POINTER, &fd, -1);
 		gtk_tree_view_set_cursor(GTK_TREE_VIEW(widget), tpath, nullptr, FALSE);
-		gtk_tree_path_free(tpath);
 		}
 
 	vd->click_fd = fd;
@@ -411,7 +394,7 @@ gboolean vdlist_press_cb(GtkWidget *widget, GdkEventButton *bevent, gpointer dat
 	if (options->view_dir_list_single_click_enter)
 		vd_color_set(vd, vd->click_fd, TRUE);
 
-	if (bevent->button == MOUSE_BUTTON_RIGHT)
+	if (bevent->button == GDK_BUTTON_SECONDARY)
 		{
 		vd->popup = vd_pop_menu(vd, vd->click_fd);
 		gtk_menu_popup_at_pointer(GTK_MENU(vd->popup), nullptr);

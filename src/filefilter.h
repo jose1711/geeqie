@@ -24,7 +24,34 @@
 
 #include <glib.h>
 
-#include "typedefs.h"
+class FileData;
+
+enum FileFormatClass : gint {
+	FORMAT_CLASS_UNKNOWN,
+	FORMAT_CLASS_IMAGE,
+	FORMAT_CLASS_RAWIMAGE,
+	FORMAT_CLASS_META,
+	FORMAT_CLASS_VIDEO,
+	FORMAT_CLASS_COLLECTION,
+	FORMAT_CLASS_DOCUMENT,
+	FORMAT_CLASS_ARCHIVE,
+	FILE_FORMAT_CLASSES
+};
+
+extern const gchar *format_class_list[];
+
+enum FileFormatRating : gint {
+    FORMAT_RATING_REJECTED = -1,
+    FORMAT_RATING_UNRATED  = 0,
+    FORMAT_RATING_1        = 1,
+    FORMAT_RATING_2        = 2,
+    FORMAT_RATING_3        = 3,
+    FORMAT_RATING_4        = 4,
+    FORMAT_RATING_5        = 5,
+};
+inline constexpr gint FORMAT_RATING_COUNT = 7;
+
+extern const gchar *format_rating_list[];
 
 struct FilterEntry {
 	gchar *key;
@@ -53,7 +80,9 @@ GList *filter_to_list(const gchar *extensions);
 const gchar *registered_extension_from_path(const gchar *name);
 gboolean filter_name_exists(const gchar *name);
 gboolean filter_file_class(const gchar *name, FileFormatClass file_class);
+gboolean filter_file_star(const gchar *name, FileFormatRating file_star);
 FileFormatClass filter_file_get_class(const gchar *name);
+FileFormatRating filter_file_get_rating(FileData *fd);
 gboolean filter_name_is_writable(const gchar *name);
 gboolean filter_name_allow_sidecar(const gchar *name);
 

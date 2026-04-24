@@ -51,7 +51,6 @@
 #include "pixbuf-util.h"
 #include "print.h"
 #include "slideshow.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 #include "ui-menu.h"
 #include "ui-utildlg.h"
@@ -67,7 +66,7 @@ struct ViewWindow
 	GtkWidget *window;
 	ImageWindow *imd;
 	FullScreenData *fs;
-	SlideShowData *ss;
+	SlideShow *ss;
 
 	GList *list;
 	GList *list_pointer;
@@ -99,9 +98,9 @@ static void view_window_notify_cb(FileData *fd, NotifyType type, gpointer data);
  *  @link view_popup_menu() @endlink \n
  *  @link view_window_key_press_cb() @endlink
  *
- * See also @link hard_coded_window_keys @endlink
+ * See also @link HardcodedWindowKey @endlink
  **/
-static hard_coded_window_keys image_window_keys[] = {
+static HardcodedWindowKeyList image_window_keys{
 	{GDK_CONTROL_MASK, 'C', N_("Copy")},
 	{GDK_CONTROL_MASK, 'M', N_("Move")},
 	{GDK_CONTROL_MASK, 'R', N_("Rename")},
@@ -149,7 +148,6 @@ static hard_coded_window_keys image_window_keys[] = {
 	{static_cast<GdkModifierType>(0), GDK_KEY_Escape, N_("Close window")},
 	{GDK_SHIFT_MASK, 'G', N_("Desaturate")},
 	{GDK_SHIFT_MASK, 'P', N_("Print")},
-	{static_cast<GdkModifierType>(0), 0, nullptr}
 };
 
 
@@ -388,7 +386,7 @@ static void view_window_press_cb(GtkWidget *, GdkEventButton *bevent, gpointer d
 
 	switch (bevent->button)
 		{
-		case MOUSE_BUTTON_LEFT:
+		case GDK_BUTTON_PRIMARY:
 			if (bevent->type == GDK_2BUTTON_PRESS)
 				{
 				view_fullscreen_toggle(vw, TRUE);
@@ -464,8 +462,7 @@ static gboolean view_window_key_press_cb(GtkWidget * (widget), GdkEventKey *even
 				file_util_rename(image_get_fd(imd), nullptr, imd->widget);
 				break;
 			case 'D': case 'd':
-				options->file_ops.safe_delete_enable = TRUE;
-				file_util_delete(image_get_fd(imd), nullptr, imd->widget);
+				file_util_delete(image_get_fd(imd), nullptr, imd->widget, TRUE);
 				break;
 			case 'W': case 'w':
 				view_window_close(vw);
@@ -505,8 +502,7 @@ static gboolean view_window_key_press_cb(GtkWidget * (widget), GdkEventKey *even
 			case GDK_KEY_Delete: case GDK_KEY_KP_Delete:
 				if (options->file_ops.enable_delete_key)
 					{
-					options->file_ops.safe_delete_enable = FALSE;
-					file_util_delete(image_get_fd(imd), nullptr, imd->widget);
+					file_util_delete(image_get_fd(imd), nullptr, imd->widget, FALSE);
 					}
 				break;
 			default:
@@ -584,7 +580,7 @@ static gboolean view_window_key_press_cb(GtkWidget * (widget), GdkEventKey *even
 					}
 				break;
 			case 'P': case 'p':
-				slideshow_pause_toggle(vw->ss);
+				if (vw->ss) vw->ss->pause_toggle();
 				break;
 			case 'F': case 'f':
 			case 'V': case 'v':
@@ -603,8 +599,7 @@ static gboolean view_window_key_press_cb(GtkWidget * (widget), GdkEventKey *even
 			case GDK_KEY_Delete: case GDK_KEY_KP_Delete:
 				if (options->file_ops.enable_delete_key)
 					{
-					options->file_ops.safe_delete_enable = TRUE;
-					file_util_delete(image_get_fd(imd), nullptr, imd->widget);
+					file_util_delete(image_get_fd(imd), nullptr, imd->widget, TRUE);
 					}
 				break;
 			case GDK_KEY_Escape:
@@ -650,7 +645,7 @@ static void button_cb(ImageWindow *imd, GdkEventButton *event, gpointer data)
 
 	switch (event->button)
 		{
-		case MOUSE_BUTTON_LEFT:
+		case GDK_BUTTON_PRIMARY:
 			if (options->image_l_click_archive && imd->image_fd->format_class == FORMAT_CLASS_ARCHIVE)
 				{
 				g_autofree gchar *dest_dir = open_archive(imd->image_fd);
@@ -671,11 +666,11 @@ static void button_cb(ImageWindow *imd, GdkEventButton *event, gpointer data)
 			else if (options->image_lm_click_nav)
 				view_step_next(vw);
 			break;
-		case MOUSE_BUTTON_MIDDLE:
+		case GDK_BUTTON_MIDDLE:
 			if (options->image_lm_click_nav)
 				view_step_prev(vw);
 			break;
-		case MOUSE_BUTTON_RIGHT:
+		case GDK_BUTTON_SECONDARY:
 			menu = view_popup_menu(vw);
 			gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
 			break;
@@ -705,23 +700,7 @@ static void scroll_cb(ImageWindow *imd, GdkEventScroll *event, gpointer data)
 		}
 	else if ( (event->state & GDK_SHIFT_MASK) != static_cast<guint>(options->mousewheel_scrolls))
 		{
-		switch (event->direction)
-			{
-			case GDK_SCROLL_UP:
-				image_scroll(imd, 0, -MOUSEWHEEL_SCROLL_SIZE);
-				break;
-			case GDK_SCROLL_DOWN:
-				image_scroll(imd, 0, MOUSEWHEEL_SCROLL_SIZE);
-				break;
-			case GDK_SCROLL_LEFT:
-				image_scroll(imd, -MOUSEWHEEL_SCROLL_SIZE, 0);
-				break;
-			case GDK_SCROLL_RIGHT:
-				image_scroll(imd, MOUSEWHEEL_SCROLL_SIZE, 0);
-				break;
-			default:
-				break;
-			}
+		image_mousewheel_scroll(imd, event->direction);
 		}
 	else
 		{
@@ -745,15 +724,6 @@ static void view_image_set_buttons(ViewWindow *vw, ImageWindow *imd)
 	image_set_scroll_func(imd, scroll_cb, vw);
 }
 
-static void view_fullscreen_stop_func(FullScreenData *, gpointer data)
-{
-	auto vw = static_cast<ViewWindow *>(data);
-
-	vw->fs = nullptr;
-
-	if (vw->ss) vw->ss->imd = vw->imd;
-}
-
 static void view_fullscreen_toggle(ViewWindow *vw, gboolean force_off)
 {
 	if (force_off && !vw->fs) return;
@@ -767,7 +737,13 @@ static void view_fullscreen_toggle(ViewWindow *vw, gboolean force_off)
 		}
 	else
 		{
-		vw->fs = fullscreen_start(vw->window, vw->imd, view_fullscreen_stop_func, vw);
+		const auto view_fullscreen_stop_func = [vw](FullScreenData *)
+		{
+			vw->fs = nullptr;
+
+			if (vw->ss) vw->ss->imd = vw->imd;
+		};
+		vw->fs = fullscreen_start(vw->window, vw->imd, view_fullscreen_stop_func);
 
 		view_image_set_buttons(vw, vw->fs->imd);
 		g_signal_connect(G_OBJECT(vw->fs->window), "key_press_event",
@@ -794,18 +770,16 @@ static void view_overlay_toggle(ViewWindow *vw)
 
 static void view_slideshow_next(ViewWindow *vw)
 {
-	if (vw->ss) slideshow_next(vw->ss);
+	if (vw->ss) vw->ss->next();
 }
 
 static void view_slideshow_prev(ViewWindow *vw)
 {
-	if (vw->ss) slideshow_prev(vw->ss);
+	if (vw->ss) vw->ss->prev();
 }
 
-static void view_slideshow_stop_func(SlideShowData *, gpointer data)
+static void view_slideshow_stop_func(ViewWindow *vw)
 {
-	auto vw = static_cast<ViewWindow *>(data);
-
 	vw->ss = nullptr;
 
 	FileData *fd = image_get_fd(view_window_active_image(vw));
@@ -819,32 +793,29 @@ static void view_slideshow_stop_func(SlideShowData *, gpointer data)
 
 static void view_slideshow_start(ViewWindow *vw)
 {
-	if (!vw->ss)
+	if (vw->ss) return;
+
+	if (vw->list)
 		{
-		CollectionData *cd;
-		CollectInfo *info;
+		vw->ss = SlideShow::start_from_filelist(nullptr, view_window_active_image(vw), filelist_copy(vw->list),
+		                                        [vw](SlideShow *){ view_slideshow_stop_func(vw); });
+		vw->list_pointer = nullptr;
+		return;
+		}
 
-		if (vw->list)
-			{
-			vw->ss = slideshow_start_from_filelist(nullptr, view_window_active_image(vw),
-								filelist_copy(vw->list),
-								view_slideshow_stop_func, vw);
-			vw->list_pointer = nullptr;
-			return;
-			}
+	CollectInfo *info;
+	CollectionData *cd = image_get_collection(view_window_active_image(vw), &info);
 
-		cd = image_get_collection(view_window_active_image(vw), &info);
-		if (cd && info)
-			{
-			vw->ss = slideshow_start_from_collection(nullptr, view_window_active_image(vw), cd,
-								 view_slideshow_stop_func, vw, info);
-			}
+	if (cd && info)
+		{
+		vw->ss = SlideShow::start_from_collection(nullptr, view_window_active_image(vw), cd, info,
+		                                          [vw](SlideShow *){ view_slideshow_stop_func(vw); });
 		}
 }
 
 static void view_slideshow_stop(ViewWindow *vw)
 {
-	if (vw->ss) slideshow_free(vw->ss);
+	delete vw->ss; /* the stop_func sets vv->ss to nullptr for us */
 }
 
 static void view_window_destroy_cb(GtkWidget *, gpointer data)
@@ -891,7 +862,7 @@ static ViewWindow *real_view_window_new(FileData *fd, GList *list, CollectionDat
 
 	vw = g_new0(ViewWindow, 1);
 
-	vw->window = window_new("view", PIXBUF_INLINE_ICON_VIEW, nullptr, nullptr);
+	vw->window = window_new("view", PIXBUF_INLINE_ICON_VIEW, nullptr);
 	DEBUG_NAME(vw->window);
 
 	geometry.min_width = DEFAULT_MINIMAL_WINDOW_SIZE;
@@ -914,7 +885,7 @@ static ViewWindow *real_view_window_new(FileData *fd, GList *list, CollectionDat
 	image_auto_refresh_enable(vw->imd, TRUE);
 	image_top_window_set_sync(vw->imd, TRUE);
 
-	gq_gtk_container_add(GTK_WIDGET(vw->window), vw->imd->widget);
+	gq_gtk_container_add(vw->window, vw->imd->widget);
 	gtk_widget_show(vw->imd->widget);
 
 	view_window_dnd_init(vw);
@@ -967,8 +938,8 @@ static ViewWindow *real_view_window_new(FileData *fd, GList *list, CollectionDat
 
 	if (options->image.limit_window_size)
 		{
-		gint mw = gq_gdk_screen_width() * options->image.max_window_size / 100;
-		gint mh = gq_gdk_screen_height() * options->image.max_window_size / 100;
+		gint mw = deprecated_gdk_screen_width() * options->image.max_window_size / 100;
+		gint mh = deprecated_gdk_screen_height() * options->image.max_window_size / 100;
 
 		w = std::min(w, mw);
 		h = std::min(h, mh);
@@ -978,7 +949,7 @@ static ViewWindow *real_view_window_new(FileData *fd, GList *list, CollectionDat
 	req_size.x = req_size.y = 0;
 	req_size.width = w;
 	req_size.height = h;
-	gtk_widget_size_allocate(GTK_WIDGET(vw->window), &req_size);
+	gtk_widget_size_allocate(vw->window, &req_size);
 
 	gtk_window_set_focus_on_map(GTK_WINDOW(vw->window), FALSE);
 	gtk_widget_show(vw->window);
@@ -997,13 +968,6 @@ static ViewWindow *real_view_window_new(FileData *fd, GList *list, CollectionDat
 	image_reload(vw->imd);
 
 	return vw;
-}
-
-static void view_window_collection_unref_cb(GtkWidget *, gpointer data)
-{
-	auto cd = static_cast<CollectionData *>(data);
-
-	collection_unref(cd);
 }
 
 void view_window_new(FileData *fd)
@@ -1025,15 +989,15 @@ void view_window_new(FileData *fd)
 				}
 			else
 				{
-				collection_unref(cd);
-				cd = nullptr;
+				g_clear_pointer(&cd, collection_unref);
 				info = nullptr;
 				}
+
 			vw = real_view_window_new(nullptr, nullptr, cd, info);
 			if (vw && cd)
 				{
-				g_signal_connect(G_OBJECT(vw->window), "destroy",
-						 G_CALLBACK(view_window_collection_unref_cb), cd);
+				g_signal_connect_swapped(G_OBJECT(vw->window), "destroy",
+				                         G_CALLBACK(collection_unref), cd);
 				}
 			}
 		else if (isdir(fd->path) && filelist_read(fd, &list, nullptr))
@@ -1084,17 +1048,11 @@ gboolean view_window_find_image(const ImageWindow *imd, gint &index, gint &total
 
 	if (vw->ss)
 		{
-		gint n = g_list_length(vw->ss->list_done);
-		gint t = n + g_list_length(vw->ss->list);
-
-		if (n == 0) n = t;
-
-		index = n - 1;
-		total = t;
+		vw->ss->get_index_and_total(index, total);
 		}
 	else
 		{
-		index = g_list_position(vw->list, vw->list_pointer);
+		index = g_list_position(vw->list, vw->list_pointer) + 1;
 		total = g_list_length(vw->list);
 		}
 
@@ -1127,19 +1085,17 @@ static void view_new_window_cb(GtkWidget *, gpointer data)
 
 static void view_edit_cb(GtkWidget *widget, gpointer data)
 {
-	ViewWindow *vw;
-	ImageWindow *imd;
-	auto key = static_cast<const gchar *>(data);
-
-	vw = static_cast<ViewWindow *>(submenu_item_get_data(widget));
+	auto *vw = static_cast<ViewWindow *>(submenu_item_get_data(widget));
 	if (!vw) return;
+
+	auto *key = static_cast<const gchar *>(data);
 
 	if (!editor_window_flag_set(key))
 		{
 		view_fullscreen_toggle(vw, TRUE);
 		}
 
-	imd = view_window_active_image(vw);
+	ImageWindow *imd = view_window_active_image(vw);
 	file_util_start_editor_from_file(key, image_get_fd(imd), imd->widget);
 }
 
@@ -1210,42 +1166,22 @@ static void view_rename_cb(GtkWidget *, gpointer data)
 	file_util_rename(image_get_fd(imd), nullptr, imd->widget);
 }
 
+template<gboolean safe_delete>
 static void view_delete_cb(GtkWidget *, gpointer data)
 {
 	auto vw = static_cast<ViewWindow *>(data);
-	ImageWindow *imd;
+	ImageWindow *imd = view_window_active_image(vw);
 
-	imd = view_window_active_image(vw);
-	options->file_ops.safe_delete_enable = FALSE;
-	file_util_delete(image_get_fd(imd), nullptr, imd->widget);
+	file_util_delete(image_get_fd(imd), nullptr, imd->widget, safe_delete);
 }
 
-static void view_move_to_trash_cb(GtkWidget *, gpointer data)
-{
-	auto vw = static_cast<ViewWindow *>(data);
-	ImageWindow *imd;
-
-	imd = view_window_active_image(vw);
-	options->file_ops.safe_delete_enable = TRUE;
-	file_util_delete(image_get_fd(imd), nullptr, imd->widget);
-}
-
+template<gboolean quoted>
 static void view_copy_path_cb(GtkWidget *, gpointer data)
 {
 	auto vw = static_cast<ViewWindow *>(data);
-	ImageWindow *imd;
+	ImageWindow *imd = view_window_active_image(vw);
 
-	imd = view_window_active_image(vw);
-	file_util_copy_path_to_clipboard(image_get_fd(imd), TRUE, ClipboardAction::COPY);
-}
-
-static void view_copy_path_unquoted_cb(GtkWidget *, gpointer data)
-{
-	auto vw = static_cast<ViewWindow *>(data);
-	ImageWindow *imd;
-
-	imd = view_window_active_image(vw);
-	file_util_copy_path_to_clipboard(image_get_fd(imd), FALSE, ClipboardAction::COPY);
+	file_util_copy_path_to_clipboard(image_get_fd(imd), quoted, ClipboardAction::COPY);
 }
 
 static void view_fullscreen_cb(GtkWidget *, gpointer data)
@@ -1273,7 +1209,7 @@ static void view_slideshow_pause_cb(GtkWidget *, gpointer data)
 {
 	auto vw = static_cast<ViewWindow *>(data);
 
-	slideshow_pause_toggle(vw->ss);
+	vw->ss->pause_toggle();
 }
 
 static void view_close_cb(GtkWidget *, gpointer data)
@@ -1349,7 +1285,7 @@ static void image_pop_menu_collections_cb(GtkWidget *widget, gpointer data)
 	fd = image_get_fd(imd);
 
 	g_autoptr(FileDataList) selection_list = g_list_append(nullptr, fd);
-	pop_menu_collections(selection_list, data);
+	collection_by_index_add_filelist(GPOINTER_TO_INT(data), selection_list);
 }
 
 static GtkWidget *view_popup_menu(ViewWindow *vw)
@@ -1364,7 +1300,7 @@ static GtkWidget *view_popup_menu(ViewWindow *vw)
 	accel_group = gtk_accel_group_new();
 	gtk_menu_set_accel_group(GTK_MENU(menu), accel_group);
 
-	g_object_set_data(G_OBJECT(menu), "window_keys", image_window_keys);
+	g_object_set_data(G_OBJECT(menu), "window_keys", &image_window_keys);
 	g_object_set_data(G_OBJECT(menu), "accel_group", accel_group);
 
 	menu_item_add_icon(menu, _("Zoom _in"), GQ_ICON_ZOOM_IN, G_CALLBACK(view_zoom_in_cb), vw);
@@ -1376,7 +1312,7 @@ static GtkWidget *view_popup_menu(ViewWindow *vw)
  	editmenu_fd_list = view_window_get_fd_list(vw);
 	g_signal_connect_swapped(G_OBJECT(menu), "destroy",
 	                         G_CALLBACK(file_data_list_free), editmenu_fd_list);
-	item = submenu_add_edit(menu, nullptr, G_CALLBACK(view_edit_cb), vw, editmenu_fd_list);
+	item = submenu_add_edit(menu, TRUE, editmenu_fd_list, G_CALLBACK(view_edit_cb), vw);
 	menu_item_add_divider(item);
 
 	submenu_add_alter(menu, G_CALLBACK(view_alter_cb), vw);
@@ -1385,33 +1321,34 @@ static GtkWidget *view_popup_menu(ViewWindow *vw)
 	item = menu_item_add(menu, _("_Go to directory view"), G_CALLBACK(view_set_layout_path_cb), vw);
 
 	menu_item_add_divider(menu);
-	menu_item_add_icon(menu, _("_Copy..."), GQ_ICON_COPY, G_CALLBACK(view_copy_cb), vw);
-	menu_item_add(menu, _("_Move..."), G_CALLBACK(view_move_cb), vw);
-	menu_item_add(menu, _("_Rename..."), G_CALLBACK(view_rename_cb), vw);
-	menu_item_add(menu, _("_Copy path"), G_CALLBACK(view_copy_path_cb), vw);
-	menu_item_add(menu, _("_Copy path unquoted"), G_CALLBACK(view_copy_path_unquoted_cb), vw);
+	menu_item_add_icon(menu, _("_Copy…"), GQ_ICON_COPY, G_CALLBACK(view_copy_cb), vw);
+	menu_item_add(menu, _("_Move…"), G_CALLBACK(view_move_cb), vw);
+	menu_item_add(menu, _("_Rename…"), G_CALLBACK(view_rename_cb), vw);
+	menu_item_add(menu, _("_Copy path"),
+	              G_CALLBACK(view_copy_path_cb<TRUE>), vw);
+	menu_item_add(menu, _("_Copy path unquoted"),
+	              G_CALLBACK(view_copy_path_cb<FALSE>), vw);
 
 	menu_item_add_divider(menu);
-	menu_item_add_icon(menu,
-				options->file_ops.confirm_move_to_trash ? _("Move to Trash...") :
-					_("Move to Trash"), GQ_ICON_DELETE,
-				G_CALLBACK(view_move_to_trash_cb), vw);
-	menu_item_add_icon(menu,
-				options->file_ops.confirm_delete ? _("_Delete...") :
-					_("_Delete"), GQ_ICON_DELETE_SHRED,
-				G_CALLBACK(view_delete_cb), vw);
+	menu_item_add_icon(menu, options->file_ops.confirm_move_to_trash ?
+	                       _("Move to Trash…") : _("Move to Trash"),
+	                   GQ_ICON_DELETE,
+	                   G_CALLBACK(view_delete_cb<TRUE>), vw);
+	menu_item_add_icon(menu, options->file_ops.confirm_delete ?
+	                       _("_Delete…") : _("_Delete"),
+	                   GQ_ICON_DELETE_SHRED,
+	                   G_CALLBACK(view_delete_cb<FALSE>), vw);
 
 	menu_item_add_divider(menu);
 
-	submenu_add_collections(menu, &item,
-				G_CALLBACK(image_pop_menu_collections_cb), vw);
-	gtk_widget_set_sensitive(item, TRUE);
+	submenu_add_collections(menu, TRUE,
+	                        G_CALLBACK(image_pop_menu_collections_cb), vw);
 	menu_item_add_divider(menu);
 
 	if (vw->ss)
 		{
 		menu_item_add(menu, _("Toggle _slideshow"), G_CALLBACK(view_slideshow_stop_cb), vw);
-		if (slideshow_paused(vw->ss))
+		if (vw->ss->is_paused())
 			{
 			item = menu_item_add(menu, _("Continue slides_how"),
 					     G_CALLBACK(view_slideshow_pause_cb), vw);
@@ -1520,16 +1457,11 @@ static void view_dir_list_do(ViewWindow *vw, GList *list, gboolean skip, gboolea
 		}
 }
 
+template<gboolean recurse>
 static void view_dir_list_add(GtkWidget *, gpointer data)
 {
 	auto d = static_cast<CViewConfirmD *>(data);
-	view_dir_list_do(d->vw, d->list, FALSE, FALSE);
-}
-
-static void view_dir_list_recurse(GtkWidget *, gpointer data)
-{
-	auto d = static_cast<CViewConfirmD *>(data);
-	view_dir_list_do(d->vw, d->list, FALSE, TRUE);
+	view_dir_list_do(d->vw, d->list, FALSE, recurse);
 }
 
 static void view_dir_list_skip(GtkWidget *, gpointer data)
@@ -1560,8 +1492,10 @@ static GtkWidget *view_confirm_dir_list(ViewWindow *vw, GList *list)
 
 	menu_item_add_icon(menu, _("Dropped list includes folders."), GQ_ICON_DIRECTORY, nullptr, nullptr);
 	menu_item_add_divider(menu);
-	menu_item_add_icon(menu, _("_Add contents"), GQ_ICON_OK, G_CALLBACK(view_dir_list_add), d);
-	menu_item_add_icon(menu, _("Add contents _recursive"), GQ_ICON_ADD, G_CALLBACK(view_dir_list_recurse), d);
+	menu_item_add_icon(menu, _("_Add contents"), GQ_ICON_OK,
+	                   G_CALLBACK(view_dir_list_add<FALSE>), d);
+	menu_item_add_icon(menu, _("Add contents _recursive"), GQ_ICON_ADD,
+	                   G_CALLBACK(view_dir_list_add<TRUE>), d);
 	menu_item_add_icon(menu, _("_Skip folders"), GQ_ICON_REMOVE, G_CALLBACK(view_dir_list_skip), d);
 	menu_item_add_divider(menu);
 	menu_item_add_icon(menu, _("Cancel"), GQ_ICON_CANCEL, G_CALLBACK(view_dir_list_cancel), d);
@@ -1574,7 +1508,7 @@ static GtkWidget *view_confirm_dir_list(ViewWindow *vw, GList *list)
  * image drag and drop routines
  *-----------------------------------------------------------------------------
  */
-
+#if !HAVE_GTK4
 static void view_window_get_dnd_data(GtkWidget *, GdkDragContext *context,
 				     gint, gint,
 				     GtkSelectionData *selection_data, guint info,
@@ -1595,22 +1529,13 @@ static void view_window_get_dnd_data(GtkWidget *, GdkDragContext *context,
 
 		if (info == TARGET_URI_LIST)
 			{
-			GList *work;
-
 			list = uri_filelist_from_gtk_selection_data(selection_data);
 
-			work = list;
-			while (work)
+			if (file_data_list_has_dir(list))
 				{
-				auto fd = static_cast<FileData *>(work->data);
-				if (isdir(fd->path))
-					{
-					GtkWidget *menu;
-					menu = view_confirm_dir_list(vw, list);
-					gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
-					return;
-					}
-				work = work->next;
+				GtkWidget *menu = view_confirm_dir_list(vw, g_steal_pointer(&list));
+				gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
+				return;
 				}
 
 			list = filelist_filter(list, FALSE);
@@ -1685,19 +1610,20 @@ static void view_window_dnd_init(ViewWindow *vw)
 
 	imd = vw->imd;
 
-	gtk_drag_source_set(imd->pr, GDK_BUTTON2_MASK,
+	gq_gtk_drag_source_set(imd->pr, GDK_BUTTON2_MASK,
 	                    dnd_file_drag_types.data(), dnd_file_drag_types.size(),
 	                    static_cast<GdkDragAction>(GDK_ACTION_COPY | GDK_ACTION_MOVE | GDK_ACTION_LINK));
-	g_signal_connect(G_OBJECT(imd->pr), "drag_data_get",
+	gq_drag_g_signal_connect(G_OBJECT(imd->pr), "drag_data_get",
 			 G_CALLBACK(view_window_set_dnd_data), vw);
 
-	gtk_drag_dest_set(imd->pr,
+	gq_gtk_drag_dest_set(imd->pr,
 	                  static_cast<GtkDestDefaults>(GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_DROP),
 	                  dnd_file_drop_types.data(), dnd_file_drop_types.size(),
 	                  static_cast<GdkDragAction>(GDK_ACTION_COPY | GDK_ACTION_MOVE | GDK_ACTION_LINK));
-	g_signal_connect(G_OBJECT(imd->pr), "drag_data_received",
+	gq_drag_g_signal_connect(G_OBJECT(imd->pr), "drag_data_received",
 			 G_CALLBACK(view_window_get_dnd_data), vw);
 }
+#endif
 
 /*
  *-----------------------------------------------------------------------------

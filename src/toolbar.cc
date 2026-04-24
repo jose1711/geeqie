@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -31,13 +32,14 @@
 
 #include <config.h>
 
-#include "compat-deprecated.h"
 #include "compat.h"
 #include "editors.h"
 #include "intl.h"
 #include "layout-util.h"
 #include "layout.h"
 #include "main-defines.h"
+#include "menu.h"
+#include "misc.h"
 #include "ui-fileops.h"
 #include "ui-menu.h"
 #include "ui-misc.h"
@@ -49,121 +51,18 @@
 namespace
 {
 
-struct ToolbarData
-{
-	GtkWidget *vbox;
-};
-
 const gchar *action_name_key = "action_name";
+const gchar *toolbar_action_key = "toolbar_action";
 
-ToolbarData *toolbarlist[2];
+GtkWidget *toolbarlist[TOOLBAR_COUNT];
 
 } // namespace
 
-/**
- * @brief
- * @param widget Not used
- * @param data Pointer to vbox list item
- * @param up Up/Down movement
- * @param single_step Move up/down one step, or to top/bottom
- *
- */
-static void toolbar_item_move(GtkWidget *, gpointer data, gboolean up, gboolean single_step)
-{
-	auto list_item = static_cast<GtkWidget *>(data);
-	GtkWidget *box;
-	gint pos = 0;
-
-	if (!list_item) return;
-	box = gtk_widget_get_ancestor(list_item, GTK_TYPE_BOX);
-	if (!box) return;
-
-	gtk_container_child_get(GTK_CONTAINER(box), list_item, "position", &pos, NULL);
-
-	if (single_step)
-		{
-		pos = up ? (pos - 1) : (pos + 1);
-		pos = std::max(pos, 0);
-		}
-	else
-		{
-		pos = up ? 0 : -1;
-		}
-
-	gtk_box_reorder_child(GTK_BOX(box), list_item, pos);
-}
-
-static void toolbar_item_move_up_cb(GtkWidget *widget, gpointer data)
-{
-	toolbar_item_move(widget, data, TRUE, TRUE);
-}
-
-static void toolbar_item_move_down_cb(GtkWidget *widget, gpointer data)
-{
-	toolbar_item_move(widget, data, FALSE, TRUE);
-}
-
-static void toolbar_item_move_top_cb(GtkWidget *widget, gpointer data)
-{
-	toolbar_item_move(widget, data, TRUE, FALSE);
-}
-
-static void toolbar_item_move_bottom_cb(GtkWidget *widget, gpointer data)
-{
-	toolbar_item_move(widget, data, FALSE, FALSE);
-}
-
-static void toolbar_item_delete_cb(GtkWidget *, gpointer data)
-{
-	gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(GTK_WIDGET(data))), GTK_WIDGET(data));
-}
-
-static void toolbar_menu_popup(GtkWidget *widget)
-{
-	GtkWidget *menu;
-
-	menu = popup_menu_short_lived();
-
-	if (widget)
-		{
-		menu_item_add_icon(menu, _("Move to _top"), GQ_ICON_GO_TOP, G_CALLBACK(toolbar_item_move_top_cb), widget);
-		menu_item_add_icon(menu, _("Move _up"), GQ_ICON_GO_UP, G_CALLBACK(toolbar_item_move_up_cb), widget);
-		menu_item_add_icon(menu, _("Move _down"), GQ_ICON_GO_DOWN, G_CALLBACK(toolbar_item_move_down_cb), widget);
-		menu_item_add_icon(menu, _("Move to _bottom"), GQ_ICON_GO_BOTTOM, G_CALLBACK(toolbar_item_move_bottom_cb), widget);
-		menu_item_add_divider(menu);
-		menu_item_add_icon(menu, _("Remove"), GQ_ICON_DELETE, G_CALLBACK(toolbar_item_delete_cb), widget);
-		menu_item_add_divider(menu);
-		}
-
-	gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
-}
-
 static gboolean toolbar_press_cb(GtkGesture *, int, double, double, gpointer data)
 {
-	auto *button = static_cast<GtkWidget *>(data);
-
-	toolbar_menu_popup(button);
+	popup_menu_bar(static_cast<GtkWidget *>(data), nullptr);
 
 	return TRUE;
-}
-
-static void get_toolbar_item(const gchar *name, gchar **label, gchar **stock_id)
-{
-	*label = nullptr;
-	*stock_id = nullptr;
-
-	std::vector<ActionItem> list = get_action_items();
-
-	const auto action_item_has_name = [name](const ActionItem &action_item)
-	{
-		return g_strcmp0(action_item.name, name) == 0;
-	};
-	const auto work = std::find_if(list.cbegin(), list.cend(), action_item_has_name);
-	if (work != list.cend())
-		{
-		*label = g_strdup(work->label);
-		*stock_id = g_strdup(work->icon_name);
-		}
 }
 
 static void toolbarlist_add_button(const gchar *name, const gchar *label,
@@ -174,13 +73,13 @@ static void toolbarlist_add_button(const gchar *name, const gchar *label,
 
 	GtkWidget *button = gtk_button_new();
 	gtk_button_set_relief(GTK_BUTTON(button), GTK_RELIEF_NONE);
-	gq_gtk_box_pack_start(GTK_BOX(box), button, FALSE, FALSE, 0);
+	gq_gtk_box_pack_start(box, button, FALSE, FALSE, 0);
 	gtk_widget_show(button);
 
 	g_object_set_data_full(G_OBJECT(button), action_name_key, g_strdup(name), g_free);
 
 	hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, PREF_PAD_BUTTON_GAP);
-	gq_gtk_container_add(GTK_WIDGET(button), hbox);
+	gq_gtk_container_add(button, hbox);
 	gtk_widget_show(hbox);
 
 #if HAVE_GTK4
@@ -189,7 +88,7 @@ static void toolbarlist_add_button(const gchar *name, const gchar *label,
 #else
 	gesture = gtk_gesture_multi_press_new(button);
 #endif
-	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), MOUSE_BUTTON_RIGHT);
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), GDK_BUTTON_SECONDARY);
 	g_signal_connect(gesture, "released", G_CALLBACK(toolbar_press_cb), button);
 
 	GtkWidget *image;
@@ -232,54 +131,27 @@ static void toolbarlist_add_button(const gchar *name, const gchar *label,
 
 static void toolbarlist_add_cb(GtkWidget *widget, gpointer data)
 {
-	auto name = static_cast<const gchar *>(g_object_get_data(G_OBJECT(widget), "toolbar_add_name"));
-	auto label = static_cast<const gchar *>(g_object_get_data(G_OBJECT(widget), "toolbar_add_label"));
-	auto stock_id = static_cast<const gchar *>(g_object_get_data(G_OBJECT(widget), "toolbar_add_stock_id"));
-	auto tbbd = static_cast<ToolbarData *>(data);
+	auto *action = static_cast<ActionItem *>(g_object_get_data(G_OBJECT(widget), toolbar_action_key));
 
-	toolbarlist_add_button(name, label, stock_id, GTK_BOX(tbbd->vbox));
-}
-
-static void get_desktop_data(const gchar *name, gchar **label, gchar **stock_id)
-{
-	EditorsList editors_list = editor_list_get();
-	auto it = std::find_if(editors_list.cbegin(), editors_list.cend(),
-	                       [name](const EditorDescription *editor) { return g_strcmp0(editor->key, name) == 0; });
-	if (it != editors_list.cend())
-		{
-		auto *editor = *it;
-
-		*label = g_strdup(editor->name);
-		*stock_id = g_strconcat(editor->icon, ".desktop", NULL);
-		}
-	else
-		{
-		*label = nullptr;
-		*stock_id = nullptr;
-		}
+	toolbarlist_add_button(action->name, action->label, action->icon_name, GTK_BOX(data));
 }
 
 // toolbar_menu_add_popup
 static gboolean toolbar_menu_add_cb(GtkWidget *, gpointer data)
 {
-	GtkWidget *item;
-	GtkWidget *menu;
+	GtkWidget *menu = popup_menu_short_lived();
 
-	menu = popup_menu_short_lived();
+	static auto *separator = new ActionItem("Separator", "Separator", "no-icon");
 
-	item = menu_item_add_stock(menu, "Separator", "Separator", G_CALLBACK(toolbarlist_add_cb), data);
-	g_object_set_data_full(G_OBJECT(item), "toolbar_add_name", g_strdup("Separator"), g_free);
-	g_object_set_data_full(G_OBJECT(item), "toolbar_add_label", g_strdup("Separator"), g_free);
-	g_object_set_data_full(G_OBJECT(item), "toolbar_add_stock_id", g_strdup("no-icon"), g_free);
+	GtkWidget *item = menu_item_add_stock(menu, "Separator", "Separator", G_CALLBACK(toolbarlist_add_cb), data);
+	g_object_set_data(G_OBJECT(item), toolbar_action_key, separator);
 
 	std::vector<ActionItem> list = get_action_items();
 
 	for (const ActionItem &action_item : list)
 		{
 		item = menu_item_add_stock(menu, action_item.label, action_item.icon_name, G_CALLBACK(toolbarlist_add_cb), data);
-		g_object_set_data_full(G_OBJECT(item), "toolbar_add_name", g_strdup(action_item.name), g_free);
-		g_object_set_data_full(G_OBJECT(item), "toolbar_add_label", g_strdup(action_item.label), g_free);
-		g_object_set_data_full(G_OBJECT(item), "toolbar_add_stock_id", g_strdup(action_item.icon_name), g_free);
+		g_object_set_data_full(G_OBJECT(item), toolbar_action_key, new ActionItem(action_item), delete_cb<ActionItem>);
 		}
 
 	gtk_menu_popup_at_pointer(GTK_MENU(menu), nullptr);
@@ -294,12 +166,13 @@ static gboolean toolbar_menu_add_cb(GtkWidget *, gpointer data)
  */
 void toolbar_apply(ToolbarType bar)
 {
-	const auto layout_toolbar_apply = [bar](LayoutWindow *lw)
+	g_autoptr(GList) list = gq_gtk_widget_get_children(toolbarlist[bar]);
+
+	const auto layout_toolbar_apply = [bar, list](LayoutWindow *lw)
 	{
 		layout_toolbar_clear(lw, bar);
 
-		g_autoptr(GList) work_toolbar = gtk_container_get_children(GTK_CONTAINER(toolbarlist[bar]->vbox));
-		for (GList *work = work_toolbar; work; work = work->next)
+		for (GList *work = list; work; work = work->next)
 			{
 			auto button = static_cast<GtkButton *>(work->data);
 			auto *action_name = static_cast<gchar *>(g_object_get_data(G_OBJECT(button), action_name_key));
@@ -313,35 +186,51 @@ void toolbar_apply(ToolbarType bar)
 
 /**
  * @brief Load the current toolbar items into the vbox
- * @param lw
+ * @param toolbar_items
  * @param box The vbox displayed in the preferences Toolbar tab
- * @param bar Main or Status toolbar
  *
  * Get the current contents of the toolbar, both menu items
  * and desktop items, and load them into the vbox
  */
-static void toolbarlist_populate(LayoutWindow *lw, GtkBox *box, ToolbarType bar)
+static void toolbarlist_populate(GList *toolbar_items, GtkBox *box)
 {
-	GList *work = g_list_first(lw->toolbar_actions[bar]);
+	std::optional<std::vector<ActionItem>> actions_list;
+	std::optional<EditorsList> editors_list;
 
-	while (work)
+	for (GList *work = toolbar_items; work; work = work->next)
 		{
 		auto name = static_cast<gchar *>(work->data);
-		gchar *label;
-		gchar *icon;
-		work = work->next;
-
-		if (file_extension_match(name, ".desktop"))
-			{
-			get_desktop_data(name, &label, &icon);
-			}
-		else
-			{
-			get_toolbar_item(name, &label, &icon);
-			}
 
 		if (g_strcmp0(name, "Separator") != 0)
 			{
+			const gchar *label = nullptr;
+			g_autofree gchar *icon = nullptr;
+
+			if (file_extension_match(name, ".desktop"))
+				{
+				if (!editors_list) editors_list = editor_list_get();
+
+				const auto it = std::find_if(editors_list->cbegin(), editors_list->cend(),
+				                             [name](const EditorDescription *editor) { return g_strcmp0(editor->key, name) == 0; });
+				if (it != editors_list->cend())
+					{
+					label = (*it)->name;
+					icon = g_strconcat((*it)->icon, ".desktop", NULL);
+					}
+				}
+			else
+				{
+				if (!actions_list) actions_list = get_action_items();
+
+				const auto it = std::find_if(actions_list->cbegin(), actions_list->cend(),
+				                             [name](const ActionItem &action_item) { return g_strcmp0(action_item.name, name) == 0; });
+				if (it != actions_list->cend())
+					{
+					label = it->label;
+					icon = g_strdup(it->icon_name);
+					}
+				}
+
 			toolbarlist_add_button(name, label, icon, box);
 			}
 		else
@@ -353,31 +242,25 @@ static void toolbarlist_populate(LayoutWindow *lw, GtkBox *box, ToolbarType bar)
 
 GtkWidget *toolbar_select_new(LayoutWindow *lw, ToolbarType bar)
 {
-	GtkWidget *scrolled;
 	GtkWidget *tbar;
 	GtkWidget *add_box;
 
 	if (!lw) return nullptr;
 
-	if (!toolbarlist[bar])
-		{
-		toolbarlist[bar] = g_new0(ToolbarData, 1);
-		}
-
 	GtkWidget *widget = gtk_box_new(GTK_ORIENTATION_VERTICAL, PREF_PAD_GAP);
 	gtk_widget_show(widget);
 
-	scrolled = gq_gtk_scrolled_window_new(nullptr, nullptr);
+	GtkWidget *scrolled = gq_gtk_scrolled_window_new(nullptr, nullptr);
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
 							GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gq_gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(scrolled), GTK_SHADOW_NONE);
 	gq_gtk_box_pack_start(GTK_BOX(widget), scrolled, TRUE, TRUE, 0);
 	gtk_widget_show(scrolled);
 
-	toolbarlist[bar]->vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-	gtk_widget_show(toolbarlist[bar]->vbox);
-	gq_gtk_container_add(GTK_WIDGET(scrolled), toolbarlist[bar]->vbox);
-	gtk_viewport_set_shadow_type(GTK_VIEWPORT(gtk_bin_get_child(GTK_BIN(scrolled))),
+	toolbarlist[bar] = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_widget_show(toolbarlist[bar]);
+	gq_gtk_container_add(scrolled, toolbarlist[bar]);
+	gq_gtk_viewport_set_shadow_type(GTK_WIDGET(gq_gtk_bin_get_child(GTK_WIDGET(scrolled))),
 																GTK_SHADOW_NONE);
 
 	add_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -390,9 +273,22 @@ GtkWidget *toolbar_select_new(LayoutWindow *lw, ToolbarType bar)
 	                                            G_CALLBACK(toolbar_menu_add_cb), toolbarlist[bar]);
 	gtk_widget_show(add_button);
 
-	toolbarlist_populate(lw,GTK_BOX(toolbarlist[bar]->vbox), bar);
+	toolbarlist_populate(lw->toolbar_actions[bar], GTK_BOX(toolbarlist[bar]));
 
 	return widget;
+}
+
+const gchar *toolbar_type_config_name(ToolbarType type)
+{
+	switch (type)
+		{
+		case TOOLBAR_MAIN:
+			return "toolbar";
+		case TOOLBAR_STATUS:
+			return "statusbar";
+		default:
+			return nullptr;
+		}
 }
 
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

@@ -36,7 +36,7 @@ struct ImageLoaderDJVU : public ImageLoaderBackend
 public:
 	~ImageLoaderDJVU() override;
 
-	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, AreaPreparedCb area_prepared_cb, gpointer data) override;
+	void init(AreaUpdatedCb area_updated_cb, SizePreparedCb size_prepared_cb, gpointer data) override;
 	gboolean write(const guchar *buf, gsize &chunk_size, gsize count, GError **error) override;
 	GdkPixbuf *get_pixbuf() override;
 	gchar *get_format_name() override;
@@ -52,11 +52,6 @@ private:
 	gint page_num;
 	gint page_total;
 };
-
-void free_buffer(guchar *pixels, gpointer)
-{
-	g_free (pixels);
-}
 
 gboolean ImageLoaderDJVU::write(const guchar *buf, gsize &chunk_size, gsize count, GError **)
 {
@@ -105,7 +100,7 @@ gboolean ImageLoaderDJVU::write(const guchar *buf, gsize &chunk_size, gsize coun
 
 	/**
 	 * @FIXME implementation of rotation is not correct */
-	g_autoptr(GdkPixbuf) tmp1 = gdk_pixbuf_new_from_data(pixels, GDK_COLORSPACE_RGB, alpha, 8, width, height, stride, free_buffer, nullptr);
+	g_autoptr(GdkPixbuf) tmp1 = gdk_pixbuf_new_from_data(pixels, GDK_COLORSPACE_RGB, alpha, 8, width, height, stride, free_pixels, nullptr);
 	g_autoptr(GdkPixbuf) tmp2 = gdk_pixbuf_flip(tmp1, TRUE);
 
 	pixbuf = gdk_pixbuf_rotate_simple(tmp2, GDK_PIXBUF_ROTATE_UPSIDEDOWN);
@@ -122,7 +117,7 @@ gboolean ImageLoaderDJVU::write(const guchar *buf, gsize &chunk_size, gsize coun
 	return TRUE;
 }
 
-void ImageLoaderDJVU::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, AreaPreparedCb, gpointer data)
+void ImageLoaderDJVU::init(AreaUpdatedCb area_updated_cb, SizePreparedCb, gpointer data)
 {
 	this->area_updated_cb = area_updated_cb;
 	this->data = data;

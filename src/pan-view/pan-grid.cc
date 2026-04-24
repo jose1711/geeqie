@@ -21,78 +21,67 @@
 
 #include "pan-grid.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "pan-item.h"
 #include "pan-types.h"
-#include "pan-util.h"
-#include "pan-view-filter.h"
-#include "typedefs.h"
+#include "pan-view.h"
 
-void pan_grid_compute(PanWindow *pw, FileData *dir_fd, gint &width, gint &height)
+void pan_grid_compute(PanWindow *pw, gint &width, gint &height)
 {
-	GList *list;
-	GList *work;
-	gint x;
-	gint y;
-	gint grid_size;
-	gint next_y;
-
-	list = pan_list_tree(dir_fd, SORT_NAME, TRUE, TRUE, pw->ignore_symlinks);
-	pan_filter_fd_list(&list, pw->filter_ui->filter_elements, pw->filter_ui->filter_classes);
-
-	grid_size = static_cast<gint>(sqrt(static_cast<gdouble>(g_list_length(list))));
-	if (pw->size > PAN_IMAGE_SIZE_THUMB_LARGE)
-		{
-		grid_size = grid_size * (512 + PAN_THUMB_GAP) * pw->image_size / 100;
-		}
-	else
-		{
-		grid_size = grid_size * (PAN_THUMB_SIZE + PAN_THUMB_GAP);
-		}
-
-	next_y = 0;
-
 	width = PAN_BOX_BORDER * 2;
 	height = PAN_BOX_BORDER * 2;
 
-	x = PAN_THUMB_GAP;
-	y = PAN_THUMB_GAP;
-	work = list;
-	while (work)
+	g_autoptr(GList) list = pan_list_tree_filtered(pw, SORT_NAME);
+
+	auto grid_size = static_cast<gint>(sqrt(g_list_length(list)));
+
+	gint x = pw->thumb_gap;
+	gint y = pw->thumb_gap;
+
+	if (pw->size > PAN_IMAGE_SIZE_THUMB_LARGE)
 		{
-		FileData *fd;
-		PanItem *pi;
+		grid_size = grid_size * (512 + pw->thumb_gap) * pw->image_size / 100;
 
-		fd = static_cast<FileData *>(work->data);
-		work = work->next;
+		gint next_y = 0;
 
-		if (pw->size > PAN_IMAGE_SIZE_THUMB_LARGE)
+		for (GList *work = list; work; work = work->next)
 			{
-			pi = pan_item_image_new(pw, fd, x, y, 10, 10);
+			auto *fd = static_cast<FileData *>(work->data);
 
-			x += pi->width + PAN_THUMB_GAP;
-			if (y + pi->height + PAN_THUMB_GAP > next_y) next_y = y + pi->height + PAN_THUMB_GAP;
+			PanItem *pi = pan_item_image_new(pw, fd, x, y, 10, 10);
+
+			x += pi->width + pw->thumb_gap;
+			next_y = std::max(y + pi->height + pw->thumb_gap, next_y);
 			if (x > grid_size)
 				{
-				x = PAN_THUMB_GAP;
+				x = pw->thumb_gap;
 				y = next_y;
 				}
-			}
-		else
-			{
-			pi = pan_item_thumb_new(pw, fd, x, y);
 
-			x += PAN_THUMB_SIZE + PAN_THUMB_GAP;
+			pi->adjust_size(pw->thumb_gap, width, height);
+			}
+		}
+	else
+		{
+		grid_size = grid_size * (pw->thumb_size + pw->thumb_gap);
+
+		for (GList *work = list; work; work = work->next)
+			{
+			auto *fd = static_cast<FileData *>(work->data);
+
+			PanItem *pi = pan_item_thumb_new(pw, fd, x, y);
+
+			x += pw->thumb_size + pw->thumb_gap;
 			if (x > grid_size)
 				{
-				x = PAN_THUMB_GAP;
-				y += PAN_THUMB_SIZE + PAN_THUMB_GAP;
+				x = pw->thumb_gap;
+				y += pw->thumb_size + pw->thumb_gap;
 				}
-			}
-		pan_item_size_coordinates(pi, PAN_THUMB_GAP, width, height);
-		}
 
-	g_list_free(list);
+			pi->adjust_size(pw->thumb_gap, width, height);
+			}
+		}
 }
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

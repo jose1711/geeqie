@@ -31,7 +31,9 @@
 
 #include <config.h>
 
-#include "typedefs.h"
+#include "sort-type.h"
+
+enum FileFormatClass : gint;
 
 struct ExifData;
 struct HistMap;
@@ -40,7 +42,31 @@ struct HistMap;
 #define DEBUG_FILEDATA
 #endif
 
+#ifdef FD_VERBOSE_DEBUG
+#include <sstream>
+#include <vector>
+#endif
+
 #define FD_MAGICK 0x12345678u
+
+enum ChangeError {
+	CHANGE_OK                           = 0,
+	CHANGE_WARN_DEST_EXISTS             = 1 << 0,
+	CHANGE_WARN_NO_WRITE_PERM           = 1 << 1,
+	CHANGE_WARN_SAME                    = 1 << 2,
+	CHANGE_WARN_CHANGED_EXT             = 1 << 3,
+	CHANGE_WARN_UNSAVED_META            = 1 << 4,
+	CHANGE_WARN_NO_WRITE_PERM_DEST_DIR  = 1 << 5,
+	CHANGE_ERROR_MASK                   = ~0xff, /**< the values below are fatal errors */
+	CHANGE_NO_READ_PERM                 = 1 << 8,
+	CHANGE_NO_WRITE_PERM_DIR            = 1 << 9,
+	CHANGE_NO_DEST_DIR                  = 1 << 10,
+	CHANGE_DUPLICATE_DEST               = 1 << 11,
+	CHANGE_NO_WRITE_PERM_DEST           = 1 << 12,
+	CHANGE_DEST_EXISTS                  = 1 << 13,
+	CHANGE_NO_SRC                       = 1 << 14,
+	CHANGE_GENERIC_ERROR                = 1 << 16
+};
 
 enum FileDataChangeType {
 	FILEDATA_CHANGE_DELETE,
@@ -66,6 +92,19 @@ enum NotifyType : gint {
 	NOTIFY_GROUPING		= 1 << 6, /**< change in fd->sidecar_files or fd->parent */
 	NOTIFY_REREAD		= 1 << 7, /**< changed file size, date, etc., file name remains unchanged */
 	NOTIFY_CHANGE		= 1 << 8  /**< generic change described by fd->change */
+};
+
+enum MarkToSelectionMode {
+	MTS_MODE_MINUS,
+	MTS_MODE_SET,
+	MTS_MODE_OR,
+	MTS_MODE_AND
+};
+
+enum SelectionToMarkMode {
+	STM_MODE_RESET,
+	STM_MODE_SET,
+	STM_MODE_TOGGLE
 };
 
 enum SelectionType {
@@ -121,8 +160,36 @@ class GlobalFileDataContext
 	FileDataContext context_;
 };
 
+#ifdef FD_VERBOSE_DEBUG
+struct FileDataDebugInfo {
+	std::vector<std::string> ref_unref_history;
+
+	void record_ref(const gchar *file, gint line, gint refcount) {
+		std::stringstream record;
+		record << "r -> ";
+		record << refcount;
+		record << " @ ";
+		record << file;
+		record << ":";
+		record << line;
+		ref_unref_history.push_back(record.str());
+	};
+
+	void record_unref(const gchar *file, gint line, gint refcount) {
+		std::stringstream record;
+		record << "u -> ";
+		record << refcount;
+		record << " @ ";
+		record << file;
+		record << ":";
+		record << line;
+		ref_unref_history.push_back(record.str());
+	};
+};
+#endif
+
 class FileData {
-    private:
+private:
 	FileData() = delete;
 
 	// TODO(xsdg): Switch FileData to using new/delete, so that FileDataContext
@@ -133,7 +200,7 @@ class FileData {
 		return &(GlobalFileDataContext::get_instance().context());
 		}
 
-    public:
+public:
 	// Child classes that encapsulate some functionality.
 	class FileList;
 
@@ -196,6 +263,10 @@ class FileData {
 	static gchar *text_from_size_abrev(gint64 size);
 	static const gchar *text_from_time(time_t t);
 
+	#ifdef FD_VERBOSE_DEBUG
+	FileDataDebugInfo debug_info;
+	#endif
+
 	/**
 	 * @headerfile file_data_new_group
 	 * scan for sidecar files - expensive
@@ -257,6 +328,7 @@ class FileData {
 	static GList *file_data_filter_file_filter_list(GList *list, const GRegex *filter);
 
 	static GList *file_data_filter_class_list(GList *list, guint filter);
+	static GList *file_data_filter_rating_list(GList *list, guint filter);
 
 	gchar *file_data_sc_list_to_string(FileData *fd);
 
@@ -331,9 +403,11 @@ class FileData {
 	void file_data_set_page_total(FileData *fd, gint page_total);
 	void file_data_set_page_num(FileData *fd, gint page_num);
 
+	bool supports_exif_orientation() const;
+
 	static void file_data_dump();
 
-    protected:
+protected:
 	static FileData *file_data_new(const gchar *path_utf8, struct stat *st, gboolean disable_sidecars, FileDataContext *context = nullptr);
 	static FileData *file_data_new_local(const gchar *path, struct stat *st, gboolean disable_sidecars, FileDataContext *context = nullptr);
 
@@ -367,6 +441,13 @@ class FileData::FileList
 	// Note that this struct will be moved to a new Util class in a subsequent commit.
 	struct SortSettings
 	{
+		bool operator==(const SortSettings &other)
+		{
+			return method == other.method
+			    && ascending == other.ascending
+			    && case_sensitive == other.case_sensitive;
+		}
+
 		SortType method = SORT_NONE;
 		gboolean ascending = TRUE;
 		gboolean case_sensitive = TRUE;
@@ -374,8 +455,7 @@ class FileData::FileList
 
 	static gint sort_compare_filedata(const FileData *fa, const FileData *fb, SortSettings *settings);
 	static gint sort_compare_filedata_full(const FileData *fa, const FileData *fb, SortType method, gboolean ascend);
-	static GList *sort(GList *list, SortType method, gboolean ascending, gboolean case_sensitive);
-	static GList *sort_full(GList *list, SortType method, gboolean ascending, gboolean case_sensitive, GCompareDataFunc cb);
+	static GList *sort(GList *list, SortSettings settings);
 
 	static gboolean read_list(FileData *dir_fd, GList **files, GList **dirs);
 	static gboolean read_list_lstat(FileData *dir_fd, GList **files, GList **dirs);
@@ -384,11 +464,12 @@ class FileData::FileList
 	static GList *from_path_list(GList *list);
 	static GList *to_path_list(GList *list);
 
+	static bool has_dir(GList *list);
 	static GList *filter(GList *list, gboolean is_dir_list);
 
 	static GList *sort_path(GList *list);
 	static GList *recursive(FileData *dir_fd);
-	static GList *recursive_full(FileData *dir_fd, SortType method, gboolean ascend, gboolean case_sensitive);
+	static GList *recursive_full(FileData *dir_fd, SortSettings settings);
 
     protected:
 	static GList *filter_out_sidecars(GList *flist);
@@ -397,7 +478,7 @@ class FileData::FileList
 	static gint sort_file_cb(gconstpointer a, gconstpointer b, gpointer data);
 	static gint sort_path_cb(gconstpointer a, gconstpointer b);
 	static void recursive_append(GList **list, GList *dirs);
-	static void recursive_append_full(GList **list, GList *dirs, SortType method, gboolean ascend, gboolean case_sensitive);
+	static void recursive_append_full(GList **list, GList *dirs, SortSettings settings);
 };
 
 /**
@@ -455,8 +536,7 @@ void file_data_disable_grouping_list(GList *fd_list, gboolean disable);
 
 gint filelist_sort_compare_filedata(const FileData *fa, const FileData *fb, FileData::FileList::SortSettings *settings);
 gint filelist_sort_compare_filedata_full(const FileData *fa, const FileData *fb, SortType method, gboolean ascend);
-GList *filelist_sort(GList *list, SortType method, gboolean ascending, gboolean case_sensitive);
-GList *filelist_sort_full(GList *list, SortType method, gboolean ascending, gboolean case_sensitive, GCompareDataFunc cb);
+GList *filelist_sort(GList *list, FileData::FileList::SortSettings settings);
 
 gboolean filelist_read(FileData *dir_fd, GList **files, GList **dirs);
 gboolean filelist_read_lstat(FileData *dir_fd, GList **files, GList **dirs);
@@ -468,11 +548,12 @@ GList *filelist_copy(GList *list);
 GList *filelist_from_path_list(GList *list);
 GList *filelist_to_path_list(GList *list);
 
+bool file_data_list_has_dir(FileDataList *list);
 GList *filelist_filter(GList *list, gboolean is_dir_list);
 
 GList *filelist_sort_path(GList *list);
 GList *filelist_recursive(FileData *dir_fd);
-GList *filelist_recursive_full(FileData *dir_fd, SortType method, gboolean ascend, gboolean case_sensitive);
+GList *filelist_recursive_full(FileData *dir_fd, FileData::FileList::SortSettings settings);
 
 gboolean file_data_register_mark_func(gint n, FileData::GetMarkFunc get_mark_func, FileData::SetMarkFunc set_mark_func, gpointer data, GDestroyNotify notify);
 void file_data_get_registered_mark_func(gint n, FileData::GetMarkFunc *get_mark_func, FileData::SetMarkFunc *set_mark_func, gpointer *data);
@@ -491,6 +572,7 @@ gboolean file_data_filter_file_filter(FileData *fd, const GRegex *filter);
 GList *file_data_filter_file_filter_list(GList *list, const GRegex *filter);
 
 GList *file_data_filter_class_list(GList *list, guint filter);
+GList *file_data_filter_rating_list(GList *list, guint filter);
 
 gchar *file_data_sc_list_to_string(FileData *fd);
 

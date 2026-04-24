@@ -25,17 +25,12 @@
 
 #include <config.h>
 
-#if !HAVE__NL_TIME_FIRST_WEEKDAY
-#  include <clocale>
-#endif
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <glib-object.h>
-#include <grp.h>
-#include <langinfo.h>
 #include <pwd.h>
 
 #include "main.h"
@@ -46,6 +41,12 @@ namespace
 {
 
 constexpr int BUFSIZE = 128;
+
+/**
+ * @def STYLE_SHIFT_STANDARD
+ * The standard shift percent for alternating list row colors
+ */
+constexpr gshort STYLE_SHIFT_STANDARD = 10;
 
 constexpr gint CELL_HEIGHT_OVERRIDE = 512;
 
@@ -268,82 +269,6 @@ int runcmd(const gchar *cmd)
 #endif
 }
 
-/**
- * @brief Returns integer representing first_day_of_week
- * @returns Integer in range 1 to 7
- * 
- * Uses current locale to get first day of week.
- * If _NL_TIME_FIRST_WEEKDAY is not available, ISO 8601
- * states first day of week is Monday.
- * USA, Mexico and Canada (and others) use Sunday as first day of week.
- * 
- * Sunday == 1
- */
-gint date_get_first_day_of_week()
-{
-#if HAVE__NL_TIME_FIRST_WEEKDAY
-	return nl_langinfo(_NL_TIME_FIRST_WEEKDAY)[0];
-#else
-	gchar *dot;
-	gchar *current_locale;
-
-	current_locale = setlocale(LC_ALL, NULL);
-	dot = strstr(current_locale, ".");
-	if ((strncmp(dot - 2, "US", 2) == 0) || (strncmp(dot - 2, "MX", 2) == 0) || (strncmp(dot - 2, "CA", 2) == 0))
-		{
-		return 1;
-		}
-	else
-		{
-		return 2;
-		}
-#endif
-}
-
-/**
- * @brief Get an abbreviated day name from locale
- * @param day Integer in range 1 to 7, representing day of week
- * @returns String containing abbreviated day name
- * 
- *  Uses current locale to get day name
- * 
- * Sunday == 1
- * Result must be freed
- */
-gchar *date_get_abbreviated_day_name(gint day)
-{
-	gchar *abday = nullptr;
-
-	switch (day)
-		{
-		case 1:
-		abday = g_strdup(nl_langinfo(ABDAY_1));
-		break;
-		case 2:
-		abday = g_strdup(nl_langinfo(ABDAY_2));
-		break;
-		case 3:
-		abday = g_strdup(nl_langinfo(ABDAY_3));
-		break;
-		case 4:
-		abday = g_strdup(nl_langinfo(ABDAY_4));
-		break;
-		case 5:
-		abday = g_strdup(nl_langinfo(ABDAY_5));
-		break;
-		case 6:
-		abday = g_strdup(nl_langinfo(ABDAY_6));
-		break;
-		case 7:
-		abday = g_strdup(nl_langinfo(ABDAY_7));
-		break;
-		default:
-			break;
-		}
-
-	return abday;
-}
-
 gchar *convert_rating_to_stars(gint rating)
 {
 	GString *str = g_string_new(nullptr);
@@ -364,56 +289,6 @@ gchar *convert_rating_to_stars(gint rating)
 		}
 
 	return g_strdup("");
-}
-
-gchar *get_file_group(const gchar *path_utf8)
-{
-	struct passwd *user;
-	gchar *ret;
-
-	struct stat st;
-
-	if (!stat_utf8(path_utf8, &st))
-		{
-		return nullptr;
-		}
-
-	user = getpwuid(st.st_uid);
-	if (!user)
-		{
-		ret = g_strdup_printf("%u", st.st_uid);
-		}
-	else
-		{
-		ret = g_strdup(user->pw_name);
-		}
-
-	return ret;
-}
-
-gchar *get_file_owner(const gchar *path_utf8)
-{
-	struct group *group;
-	gchar *ret;
-
-	struct stat st;
-
-	if (!stat_utf8(path_utf8, &st))
-		{
-		return nullptr;
-		}
-
-	group = getgrgid(st.st_gid);
-	if (!group)
-		{
-		ret = g_strdup_printf("%u", st.st_gid);
-		}
-	else
-		{
-		ret = g_strdup(group->gr_name);
-		}
-
-	return ret;
 }
 
 gchar *get_symbolic_link(const gchar *path_utf8)
@@ -445,21 +320,54 @@ gint get_cpu_cores()
 }
 
 #if HAVE_GTK4
-void convert_gdkcolor_to_gdkrgba(gpointer data, GdkRGBA *gdk_rgba)
+GdkRGBA convert_gdkcolor_to_gdkrgba(gpointer data)
 {
 /* @FIXME GTK4 stub */
 }
 #else
-void convert_gdkcolor_to_gdkrgba(gpointer data, GdkRGBA *gdk_rgba)
+GdkRGBA convert_gdkcolor_to_gdkrgba(gpointer data)
 {
-	auto gdk_color = static_cast<GdkColor *>(data);
+	auto *gdk_color = static_cast<GdkColor *>(data);
 
-	gdk_rgba->red = CLAMP((double)gdk_color->red / 65535.0, 0.0, 1.0);
-	gdk_rgba->green = CLAMP((double)gdk_color->green / 65535.0, 0.0, 1.0);
-	gdk_rgba->blue = CLAMP((double)gdk_color->blue / 65535.0, 0.0, 1.0);
-	gdk_rgba->alpha = 1.0;
+	return { std::clamp((double)gdk_color->red / 65535.0, 0.0, 1.0),
+	         std::clamp((double)gdk_color->green / 65535.0, 0.0, 1.0),
+	         std::clamp((double)gdk_color->blue / 65535.0, 0.0, 1.0),
+	         1.0 };
 }
 #endif
+
+/**
+ * @brief Shifts a GdkRGBA values lighter or darker \n
+ * val is percent from 1 to 100, or -1 for default (usually 10%) \n
+ * direction is -1 darker, 0 auto, 1 lighter
+ */
+void shift_color(GdkRGBA &src, gshort val, gint direction)
+{
+	if (val == -1)
+		{
+		val = STYLE_SHIFT_STANDARD;
+		}
+	else
+		{
+		val = std::clamp<gshort>(val, 1, 100);
+		}
+
+	const gdouble cs = 1.0 / 100 * val;
+
+	/* up or down ? */
+	if (direction < 0 || (direction == 0 && (src.red + src.green + src.blue) / 3 > 0.5))
+		{
+		src.red = std::max(0.0, src.red - cs);
+		src.green = std::max(0.0, src.green - cs);
+		src.blue = std::max(0.0, src.blue - cs);
+		}
+	else
+		{
+		src.red = std::min(1.0, src.red + cs);
+		src.green = std::min(1.0, src.green + cs);
+		src.blue = std::min(1.0, src.blue + cs);
+		}
+}
 
 void gq_gtk_entry_set_text(GtkEntry *entry, const gchar *text)
 {
@@ -511,22 +419,87 @@ void cell_renderer_height_override(GtkCellRenderer *renderer)
  *        Value -1 means using the cursor of its parent window.
  * @todo Use std::optional for icon since C++17 instead of special -1 value
  */
+#if HAVE_GTK4
+static const gchar *cursor_name_from_legacy_icon(gint icon)
+{
+	switch (icon)
+		{
+		case GDK_ARROW:
+			return "default";
+		case GDK_HAND2:
+			return "pointer";
+		case GDK_CROSS:
+			return "crosshair";
+		case GDK_WATCH:
+			return "wait";
+		case GDK_XTERM:
+			return "text";
+		case GDK_FLEUR:
+			return "move";
+		default:
+			return nullptr;
+		}
+}
+#endif
+
 void widget_set_cursor(GtkWidget *widget, gint icon)
 {
-	GdkWindow *window = gtk_widget_get_window(widget);
-	if (!window) return;
+	if (!widget)
+		{
+		return;
+		}
+
+#if HAVE_GTK4
+	if (icon == -1)
+		{
+		gtk_widget_set_cursor(widget, nullptr);
+		}
+	else
+		{
+		auto *name = cursor_name_from_legacy_icon(icon);
+		if (name)
+			{
+			gtk_widget_set_cursor_from_name(widget, name);
+			}
+		}
+
+#else
+	auto *window = gtk_widget_get_window(widget);
+
+	if (!window)
+		{
+		return;
+		}
 
 	GdkCursor *cursor = nullptr;
 
 	if (icon != -1)
 		{
-		GdkDisplay *display = gdk_display_get_default();
+		auto *display = gdk_window_get_display(window);
 		cursor = gdk_cursor_new_for_display(display, static_cast<GdkCursorType>(icon));
 		}
+#endif
 
 	gdk_window_set_cursor(window, cursor);
 
 	if (cursor) g_object_unref(cursor);
 }
 
+GtkWidget *widget_get_toplevel(GtkWidget *widget)
+{
+#if HAVE_GTK4
+	auto *root = gtk_widget_get_root(vf->listview);
+
+	if (GTK_IS_WINDOW(root))
+		{
+		return GTK_WINDOW(root);
+		}
+	else
+		{
+		return nullptr;
+		}
+#else
+	return gtk_widget_get_toplevel(widget);
+#endif
+}
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

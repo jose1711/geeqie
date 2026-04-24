@@ -20,6 +20,8 @@
 
 #include "command-line-handling.h"
 
+#include <cmath>
+#include <cstdlib>
 #include <vector>
 
 #include "cache-maint.h"
@@ -32,7 +34,10 @@
 #include "exif.h"
 #include "filedata.h"
 #include "filefilter.h"
-#include "glua.h"
+#include "geometry.h"
+#if HAVE_LUA
+#  include "glua.h"
+#endif
 #include "image.h"
 #include "img-view.h"
 #include "intl.h"
@@ -181,10 +186,10 @@ void gq_action(GtkApplication *, GApplicationCommandLine *app_command_line, GVar
 		{
 		GtkAction *action;
 
-		action = gq_gtk_action_group_get_action(lw_id->action_group, text);
+		action = deprecated_gtk_action_group_get_action(lw_id->action_group, text);
 		if (action)
 			{
-			gq_gtk_action_activate(action);
+			deprecated_gtk_action_activate(action);
 			}
 		else
 			{
@@ -232,46 +237,19 @@ void gq_cache_metadata(GtkApplication *app, GApplicationCommandLine *, GVariantD
 	cache_maintain_home_remote(app, TRUE, FALSE, nullptr);
 }
 
+template<gboolean shared, gboolean recurse>
 void gq_cache_render(GtkApplication *app, GApplicationCommandLine *, GVariantDict *command_line_options_dict, GList *)
 {
-	gchar* text;
+	if (shared && !options->thumbnails.spec_standard) return;
 
-	g_variant_dict_lookup(command_line_options_dict, "cache-render", "&s", &text);
+	g_autoptr(GString) key = g_string_new("cache-render");
+	if (shared) g_string_append(key, "-shared");
+	if (recurse) g_string_append(key, "-recurse");
 
-	cache_manager_render_remote(app, text, FALSE, FALSE, nullptr);
-}
+	const gchar *text;
+	g_variant_dict_lookup(command_line_options_dict, key->str, "&s", &text);
 
-void gq_cache_render_recurse(GtkApplication *app, GApplicationCommandLine *, GVariantDict *command_line_options_dict, GList *)
-{
-	gchar* text;
-
-	g_variant_dict_lookup(command_line_options_dict, "cache-render-recurse", "&s", &text);
-
-	cache_manager_render_remote(app, text, TRUE, FALSE, nullptr);
-}
-
-void gq_cache_render_shared(GtkApplication *app, GApplicationCommandLine *, GVariantDict *command_line_options_dict, GList *)
-{
-	gchar* text;
-
-	g_variant_dict_lookup(command_line_options_dict, "cache-render-shared", "&s", &text);
-
-	if(options->thumbnails.spec_standard)
-		{
-		cache_manager_render_remote(app, text, FALSE, TRUE, nullptr);
-		}
-}
-
-void gq_cache_render_shared_recurse(GtkApplication *app, GApplicationCommandLine *, GVariantDict *command_line_options_dict, GList *)
-{
-	gchar* text;
-
-	g_variant_dict_lookup(command_line_options_dict, "cache-shared-recurse", "&s", &text);
-
-	if(options->thumbnails.spec_standard)
-		{
-		cache_manager_render_remote(app, text, TRUE, TRUE, nullptr);
-		}
+	cache_manager_render_remote(app, text, recurse, shared, nullptr);
 }
 
 void gq_cache_shared(GtkApplication *, GApplicationCommandLine *, GVariantDict *command_line_options_dict, GList *)
@@ -338,11 +316,21 @@ void gq_config_load(GtkApplication *, GApplicationCommandLine *app_command_line,
 }
 
 #ifdef DEBUG
+/**
+ * @brief Convert debug input string to integer and set level
+ * @param GtkApplication
+ * @param GApplicationCommandLine
+ * @param command_line_options_dict
+ * @param GList
+ *
+ * The debug string should be between 0 and 4. If an illegal text string is
+ * input, the conversion will default to integer 0.
+ */
 void gq_debug(GtkApplication *, GApplicationCommandLine *, GVariantDict *command_line_options_dict, GList *)
 {
-	gint debug_level;
-	g_variant_dict_lookup(command_line_options_dict, "debug", "i", &debug_level);
-	set_debug_level(debug_level);
+	g_autofree gchar *debug_level = nullptr;;
+	g_variant_dict_lookup(command_line_options_dict, "debug", "s", &debug_level);
+	set_debug_level((gint)g_ascii_strtoll(debug_level, nullptr, 10));
 }
 #endif
 
@@ -436,10 +424,11 @@ void file_load_no_raise(const gchar *text, GApplicationCommandLine *app_command_
 		}
 }
 
+template<gboolean recurse>
 void gq_dupes(GtkApplication *app, GApplicationCommandLine *app_command_line, GVariantDict *command_line_options_dict, GList *)
 {
 	const gchar *path;
-	g_variant_dict_lookup(command_line_options_dict, "dupes", "&s", &path);
+	g_variant_dict_lookup(command_line_options_dict, recurse ? "dupes-recurse" : "dupes", "&s", &path);
 
 	g_autofree gchar *folder_path = expand_tilde(path);
 	if (!isdir(folder_path))
@@ -451,34 +440,14 @@ void gq_dupes(GtkApplication *app, GApplicationCommandLine *app_command_line, GV
 		exit(EXIT_FAILURE);
 		}
 
-	dupe_window_add_folder(folder_path);
+	dupe_window_add_folder(folder_path, recurse);
 }
 
 void gq_dupes_export(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *, GList *)
 {
-	g_autoptr(GString) output_string = g_string_new(nullptr);
-
-	export_duplicates_data_command_line(output_string);
+	g_autoptr(GString) output_string = export_duplicates_data_command_line();
 
 	g_application_command_line_print(app_command_line, "%s\n", output_string->str);
-}
-
-void gq_dupes_recurse(GtkApplication *app, GApplicationCommandLine *app_command_line, GVariantDict *command_line_options_dict, GList *)
-{
-	const gchar *path;
-	g_variant_dict_lookup(command_line_options_dict, "dupes-recurse", "&s", &path);
-
-	g_autofree gchar *folder_path = expand_tilde(path);
-	if (!isdir(folder_path))
-		{
-		g_autofree gchar *notification_message = g_strdup_printf("\"%s\"%s", folder_path, _(" is not a folder"));
-		cache_maintenance_notification(app, notification_message, FALSE);
-		g_application_command_line_print(app_command_line, "%s\n", notification_message);
-
-		exit(EXIT_FAILURE);
-		}
-
-	dupe_window_add_folder_recurse(folder_path);
 }
 
 void gq_file(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *command_line_options_dict, GList *)
@@ -551,7 +520,7 @@ void gq_geometry(GtkApplication *, GApplicationCommandLine *, GVariantDict *comm
 		g_auto(GStrv) geometry = g_strsplit_set(text, "+x", 4);
 		if (geometry[0] != nullptr && geometry[1] != nullptr)
 			{
-			gtk_window_resize(GTK_WINDOW(lw_id->window), atoi(geometry[0]), atoi(geometry[1]));
+			gq_gtk_window_resize(GTK_WINDOW(lw_id->window), atoi(geometry[0]), atoi(geometry[1]));
 			}
 		if (geometry[2] != nullptr && geometry[3] != nullptr)
 			{
@@ -688,13 +657,16 @@ void gq_get_file_info(GtkApplication *, GApplicationCommandLine *app_command_lin
 	file_data_unref(fd);
 }
 
-void get_filelist(GApplicationCommandLine *app_command_line, const gchar *text, gboolean recurse)
+template<bool recurse>
+void gq_get_filelist(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *command_line_options_dict, GList *)
 {
-	FileFormatClass format_class;
-	FileData *dir_fd;
-	FileData *fd;
-	GList *work;
+	g_autoptr(GString) key = g_string_new("get-filelist");
+	if (recurse) g_string_append(key, "-recurse");
 
+	const gchar *text;
+	g_variant_dict_lookup(command_line_options_dict, key->str, "&s", &text);
+
+	FileData *dir_fd;
 	if (strcmp(text, "") == 0)
 		{
 		if (!layout_valid(&lw_id)) return;
@@ -720,13 +692,12 @@ void get_filelist(GApplicationCommandLine *app_command_line, const gchar *text, 
 		}
 
 	g_autoptr(GString) out_string = g_string_new(nullptr);
-	work = list;
-	while (work)
+	for (GList *work = list; work; work = work->next)
 		{
-		fd = static_cast<FileData *>(work->data);
+		auto *fd = static_cast<FileData *>(work->data);
 		g_string_append(out_string, fd->path);
-		format_class = filter_file_get_class(fd->path);
 
+		FileFormatClass format_class = filter_file_get_class(fd->path);
 		switch (format_class)
 			{
 			case FORMAT_CLASS_IMAGE:
@@ -757,30 +728,13 @@ void get_filelist(GApplicationCommandLine *app_command_line, const gchar *text, 
 				out_string = g_string_append(out_string, "    Class: Unknown");
 				break;
 			}
+
 		out_string = g_string_append(out_string, "\n");
-		work = work->next;
 		}
 
 	g_application_command_line_print(app_command_line, "%s\n",  out_string->str);
 
 	file_data_unref(dir_fd);
-}
-
-void gq_get_filelist(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *command_line_options_dict, GList *)
-{
-	gchar *text;
-	g_variant_dict_lookup(command_line_options_dict, "get-filelist", "&s", &text);
-
-	get_filelist(app_command_line, text, FALSE);
-}
-
-
-void gq_get_filelist_recurse(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *command_line_options_dict, GList *)
-{
-	gchar *text;
-	g_variant_dict_lookup(command_line_options_dict, "get-filelist-recurse", "&s", &text);
-
-	get_filelist(app_command_line, text, TRUE);
 }
 
 void gq_get_rectangle(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *, GList *)
@@ -791,12 +745,7 @@ void gq_get_rectangle(GtkApplication *, GApplicationCommandLine *app_command_lin
 	auto *pr = PIXBUF_RENDERER(lw_id->image->pr);
 	if (!pr) return;
 
-	gint x1;
-	gint y1;
-	gint x2;
-	gint y2;
-
-	image_get_rectangle(x1, y1, x2, y2);
+	const auto [x1, y1, x2, y2] = image_get_rectangle();
 
 	g_autofree gchar *rectangle_info = g_strdup_printf(_("%dx%d+%d+%d"),
 	                                                   std::abs(x1 - x2),
@@ -920,9 +869,10 @@ void gq_log_file(GtkApplication *, GApplicationCommandLine *, GVariantDict *comm
 	command_line->log_file = path_from_utf8(text);
 }
 
-#if HAVE_LUA // @todo Use [[maybe_unused]] for command_line_options_dict since C++17 and merge declarations
-void gq_lua(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *command_line_options_dict, GList *)
+void gq_lua(GtkApplication *, GApplicationCommandLine *app_command_line,
+            [[maybe_unused]] GVariantDict *command_line_options_dict, GList *)
 {
+#if HAVE_LUA
 	const gchar *text;
 	g_variant_dict_lookup(command_line_options_dict, "lua", "&s", &text);
 
@@ -944,13 +894,10 @@ void gq_lua(GtkApplication *, GApplicationCommandLine *app_command_line, GVarian
 		{
 		g_application_command_line_print(app_command_line, _("lua error: no data\n"));
 		}
-}
 #else
-void gq_lua(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *, GList *)
-{
 	g_application_command_line_print(app_command_line, _("Lua is not available\n"));
-}
 #endif
+}
 
 void gq_new_window(GtkApplication *, GApplicationCommandLine *app_command_line, GVariantDict *, GList *)
 {
@@ -976,32 +923,34 @@ void gq_pixel_info(GtkApplication *, GApplicationCommandLine *app_command_line, 
 
 	gint width;
 	gint height;
-	pixbuf_renderer_get_image_size(pr, &width, &height);
+	pixbuf_renderer_get_image_size(pr, width, height);
 	if (width < 1 || height < 1) return;
 
-	gint x_pixel;
-	gint y_pixel;
-	pixbuf_renderer_get_mouse_position(pr, &x_pixel, &y_pixel);
-	if (x_pixel < 0 || y_pixel < 0) return;
-
-	gint r_mouse;
-	gint g_mouse;
-	gint b_mouse;
-	gint a_mouse;
-	pixbuf_renderer_get_pixel_colors(pr, x_pixel, y_pixel, &r_mouse, &g_mouse, &b_mouse, &a_mouse);
+	GqPoint pixel;
+	pixbuf_renderer_get_mouse_position(pr, pixel);
+	if (pixel.x < 0 || pixel.y < 0) return;
 
 	g_autofree gchar *pixel_info = nullptr;
-	if (gdk_pixbuf_get_has_alpha(pr->pixbuf))
+	if (const auto color = pixbuf_renderer_get_pixel_colors(pr, pixel);
+	    color.has_value())
 		{
-		pixel_info = g_strdup_printf(_("[%d,%d]: RGBA(%3d,%3d,%3d,%3d)"),
-		                             x_pixel, y_pixel,
-		                             r_mouse, g_mouse, b_mouse, a_mouse);
+		if (gdk_pixbuf_get_has_alpha(pr->pixbuf))
+			{
+			pixel_info = g_strdup_printf(_("[%d,%d]: RGBA(%3d,%3d,%3d,%3d)"),
+			                             pixel.x, pixel.y,
+			                             color->r, color->g, color->b, color->a);
+			}
+		else
+			{
+			pixel_info = g_strdup_printf(_("[%d,%d]: RGB(%3d,%3d,%3d)"),
+			                             pixel.x, pixel.y,
+			                             color->r, color->g, color->b);
+			}
 		}
 	else
 		{
-		pixel_info = g_strdup_printf(_("[%d,%d]: RGB(%3d,%3d,%3d)"),
-		                             x_pixel, y_pixel,
-		                             r_mouse, g_mouse, b_mouse);
+		pixel_info = g_strdup_printf(_("[%d,%d]: RGB(---,---,---)"),
+		                             pixel.x, pixel.y);
 		}
 
 	g_application_command_line_print(app_command_line, "%s\n", pixel_info);
@@ -1214,7 +1163,7 @@ void gq_slideshow_recurse(GtkApplication *, GApplicationCommandLine *,GVariantDi
 	FileData *dir_fd = file_data_new_dir(tilde_filename);
 
 	layout_valid(&lw_id);
-	list = filelist_recursive_full(dir_fd, lw_id->options.file_view_list_sort.method, lw_id->options.file_view_list_sort.ascend, lw_id->options.file_view_list_sort.case_sensitive);
+	list = filelist_recursive_full(dir_fd, lw_id->options.file_view_list_sort);
 	file_data_unref(dir_fd);
 	if (!list) return;
 
@@ -1397,7 +1346,7 @@ void process_files(GList *file_list)
 
 			selected = nullptr;
 			work = file_list;
-			layout_set_path(lw_id, g_path_get_dirname(static_cast<const gchar *>(work->data)));
+			layout_set_path(lw_id, static_cast<const gchar *>(work->data));
 			while (work)
 				{
 				fd = file_data_new_simple(static_cast<gchar *>(work->data));
@@ -1420,10 +1369,10 @@ CommandLineOptionEntry command_line_options[] =
 	{ "action-list",                 gq_action_list,                 PRIMARY_REMOTE, TEXT },
 	{ "back",                        gq_back,                        PRIMARY_REMOTE, GUI  },
 	{ "cache-metadata",              gq_cache_metadata,              PRIMARY_REMOTE, GUI  },
-	{ "cache-render",                gq_cache_render,                PRIMARY_REMOTE, GUI  },
-	{ "cache-render-recurse",        gq_cache_render_recurse,        PRIMARY_REMOTE, GUI  },
-	{ "cache-render-shared",         gq_cache_render_shared,         PRIMARY_REMOTE, GUI  },
-	{ "cache-render-shared-recurse", gq_cache_render_shared_recurse, PRIMARY_REMOTE, GUI  },
+	{ "cache-render",                gq_cache_render<FALSE, FALSE>,  PRIMARY_REMOTE, GUI  },
+	{ "cache-render-recurse",        gq_cache_render<FALSE, TRUE>,   PRIMARY_REMOTE, GUI  },
+	{ "cache-render-shared",         gq_cache_render<TRUE, FALSE>,   PRIMARY_REMOTE, GUI  },
+	{ "cache-render-shared-recurse", gq_cache_render<TRUE, TRUE>,    PRIMARY_REMOTE, GUI  },
 	{ "cache-shared",                gq_cache_shared,                PRIMARY_REMOTE, GUI  },
 	{ "cache-thumbs",                gq_cache_thumbs,                PRIMARY_REMOTE, GUI  },
 	{ "close-window",                gq_close_window,                PRIMARY_REMOTE, GUI  },
@@ -1433,9 +1382,9 @@ CommandLineOptionEntry command_line_options[] =
 #endif
 	{ "delay",                       gq_delay,                       PRIMARY_REMOTE, GUI  },
 	{ "file",                        gq_file,                        PRIMARY_REMOTE, GUI  },
-	{ "dupes",                       gq_dupes,                       PRIMARY_REMOTE, GUI  },
+	{ "dupes",                       gq_dupes<FALSE>,                PRIMARY_REMOTE, GUI  },
 	{ "dupes-export",                gq_dupes_export,                PRIMARY_REMOTE, TEXT },
-	{ "dupes-recurse",               gq_dupes_recurse,               PRIMARY_REMOTE, GUI  },
+	{ "dupes-recurse",               gq_dupes<TRUE>,                 PRIMARY_REMOTE, GUI  },
 	{ "File",                        gq_File,                        PRIMARY_REMOTE, GUI  },
 	{ "file-extensions",             gq_file_extensions,             PRIMARY_REMOTE, TEXT },
 	{ "first",                       gq_first,                       PRIMARY_REMOTE, GUI  },
@@ -1445,8 +1394,8 @@ CommandLineOptionEntry command_line_options[] =
 	{ "get-collection-list",         gq_get_collection_list,         PRIMARY_REMOTE, TEXT },
 	{ "get-destination",             gq_get_destination,             PRIMARY_REMOTE, GUI  },
 	{ "get-file-info",               gq_get_file_info,               REMOTE        , N_A  },
-	{ "get-filelist",                gq_get_filelist,                PRIMARY_REMOTE, GUI  },
-	{ "get-filelist-recurse",        gq_get_filelist_recurse,        PRIMARY_REMOTE, GUI  },
+	{ "get-filelist",                gq_get_filelist<false>,         PRIMARY_REMOTE, GUI  },
+	{ "get-filelist-recurse",        gq_get_filelist<true>,          PRIMARY_REMOTE, GUI  },
 	{ "get-rectangle",               gq_get_rectangle,               REMOTE        , N_A  },
 	{ "get-render-intent",           gq_get_render_intent,           REMOTE        , N_A  },
 	{ "get-selection",               gq_get_selection,               REMOTE        , N_A  },

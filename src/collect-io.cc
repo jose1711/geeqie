@@ -29,13 +29,13 @@
 #include <gdk/gdk.h>
 #include <glib-object.h>
 
-#if defined(__GLIBC__)
+#include <config.h>
+
+#if HAVE_MNTENT_H
 #include <mntent.h>
 #else
 #include <sys/mount.h>
 #endif
-
-#include <config.h>
 
 #include "collect.h"
 #include "filedata.h"
@@ -45,7 +45,6 @@
 #include "options.h"
 #include "thumb.h"
 #include "ui-fileops.h"
-#include "ui-utildlg.h"
 
 #ifdef __NetBSD__
 #define statfs statvfs
@@ -54,7 +53,7 @@
 namespace
 {
 
-#if defined(__GLIBC__)
+#if HAVE_MNTENT_H
 using MFILE = FILE;
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MFILE, endmntent)
 #endif
@@ -139,7 +138,7 @@ bool is_file_on_mounted_drive(const gchar *filename)
 		       g_str_has_prefix(filename, dirname);
 	};
 
-#if defined(__GLIBC__)
+#if HAVE_MNTENT_H
 	g_autoptr(MFILE) mount_entries = setmntent("/proc/mounts", "r");
 	if (mount_entries == nullptr)
 		{
@@ -199,6 +198,7 @@ static gboolean collection_load_private(CollectionData *cd, const gchar *path, C
 	guint flush = !!(flags & COLLECTION_LOAD_FLUSH);
 	guint append = !!(flags & COLLECTION_LOAD_APPEND);
 	guint only_geometry = !!(flags & COLLECTION_LOAD_GEOMETRY);
+	g_autofree gchar *infotext = nullptr;
 
 	if (!only_geometry)
 		{
@@ -247,7 +247,15 @@ static gboolean collection_load_private(CollectionData *cd, const gchar *path, C
 			/* Parse comments */
 			if (*p == '#')
 				{
+				if (strncmp(p, "#i ", 3 ) == 0)
+					{
+					g_free(infotext);
+					infotext = g_strdup(p+3);
+					gchar *q = strpbrk(infotext, "\r\n");
+					if (q) *q = 0;
+					}
 				if (!need_header) continue;
+
 				if (g_ascii_strncasecmp(p, GQ_COLLECTION_MARKER, GQ_COLLECTION_MARKER_LEN) == 0)
 					{
 					/* Looks like an official collection, allow unchecked input.
@@ -330,21 +338,44 @@ static gboolean collection_load_private(CollectionData *cd, const gchar *path, C
 		if (!flush)
 			changed |= collect_manager_process_action(entry, &filename);
 
-		if (filename[0] == G_DIR_SEPARATOR && collection_add_check(cd, file_data_new_simple(filename), FALSE, TRUE)) continue;
+		if (filename[0] == G_DIR_SEPARATOR && collection_add(cd, file_data_new_simple(filename), FALSE, infotext))
+			{
+			g_clear_pointer(&infotext, g_free);
+			continue;
+			}
 
 		log_printf("Warning: Collection: %s Invalid file: %s", cd->name, filename);
 		DEBUG_1("collection invalid file: %s", filename);
 
-		/* If the file path has the prefix home, tmp or usr it was on the local file system and has been deleted. Ignore it. */
+		/* If the file path has the prefix home, tmp or usr it was on the local file system and has
+		 * been deleted. Ignore it. */
 		if (!g_str_has_prefix(filename, "/home") && !g_str_has_prefix(filename, "/tmp") && !g_str_has_prefix(filename, "/usr"))
 			{
-			/* The file was on a mounted drive and either has been deleted or the drive is not mounted */
+			/* The file was on a mountable drive and either has been deleted or the drive is not
+			 * mounted.
+			 */
 			if (!is_file_on_mounted_drive(filename))
 				{
+				/* The is on a mountable drive which is not mounted.
+				 * This event can happen when the user opens a Collection, or when a
+				 * file_data_register_notify_func runs. Whenever a file move or rename happens, the
+				 * notify function runs, presumably to check if the file is in a Collection and so
+				 * modify it.
+				 * Therefore it is better to use a notification rather than a warning message that
+				 * requires the user to acknowledge it.
+				 */
 				log_printf("%s is a file on an unmounted filesystem: %s", filename, cd->path);
-				g_autofree gchar *text = g_strdup_printf(_("This Collection cannot be opened because it contains a link to a file on a drive which is not yet mounted.\n\nCollection: %s\nFile: %s\n"),
-				                                         cd->path, filename);
-				warning_dialog(_("Cannot open Collection"), text, GQ_ICON_DIALOG_WARNING, nullptr);
+				g_autofree gchar *text = g_strdup_printf(_("This Collection cannot be opened because it contains a link to a file on a drive which is not yet mounted.\n\nCollection: %s\nFile: %s\n"), cd->path, filename);
+
+				g_autoptr(GNotification) notification = g_notification_new("Geeqie");
+				auto *app = g_application_get_default();
+
+				g_notification_set_title(notification, _("Collections"));
+				g_notification_set_body(notification, _(text));
+				g_notification_set_priority(notification, G_NOTIFICATION_PRIORITY_NORMAL);
+				g_notification_set_default_action(notification, "app.null");
+
+				g_application_send_notification(G_APPLICATION(app), "collection-unmounted-drive", notification);
 
 				success = FALSE;
 				break;
@@ -376,7 +407,7 @@ static gboolean collection_load_private(CollectionData *cd, const gchar *path, C
 		gchar *buf = nullptr;
 		while (collect_manager_process_action(entry, &buf))
 			{
-			collection_add_check(cd, file_data_new_group(buf), FALSE, TRUE);
+			collection_add(cd, file_data_new_group(buf), FALSE);
 			changed = TRUE;
 			g_free(buf);
 			buf = nullptr;
@@ -417,7 +448,7 @@ static void collection_load_thumb_do(CollectionData *cd)
 	collection_info_set_thumb(cd->thumb_info, pixbuf);
 	g_object_unref(pixbuf);
 
-	if (cd->info_updated_func) cd->info_updated_func(cd, cd->thumb_info, cd->info_updated_data);
+	if (cd->info_updated_func) cd->info_updated_func(cd, cd->thumb_info);
 }
 
 static void collection_load_thumb_error_cb(ThumbLoader *, gpointer data)
@@ -463,7 +494,7 @@ static void collection_load_thumb_step(CollectionData *cd)
 		collection_load_stop(cd);
 
 		/* send a NULL CollectInfo to notify end */
-		if (cd->info_updated_func) cd->info_updated_func(cd, nullptr, cd->info_updated_data);
+		if (cd->info_updated_func) cd->info_updated_func(cd, nullptr);
 
 		return;
 		}
@@ -531,6 +562,8 @@ static gboolean collection_save_private(CollectionData *cd, const gchar *path)
 	for (GList *work = cd->list; work; work = work->next)
 		{
 		auto ci = static_cast<CollectInfo *>(work->data);
+		if (ci->infotext && *ci->infotext)
+			g_string_append_printf(gstring, "#i %s\n", ci->infotext);
 
 		g_string_append_printf(gstring, "\"%s\"\n", ci->fd->path);
 		}
@@ -947,8 +980,7 @@ static void collect_manager_timer_push(gint stop)
 		{
 		if (!stop) return;
 
-		g_source_remove(collection_manager_timer_id);
-		collection_manager_timer_id = 0;
+		g_clear_handle_id(&collection_manager_timer_id, g_source_remove);
 		}
 
 	if (!stop)
@@ -1121,5 +1153,19 @@ void collect_manager_list(GList **names_exc, GList **names_inc, GList **paths)
 				}
 			}
 		}
+}
+
+gchar *collection_manager_path_by_index(gint index)
+{
+	if (index < 0) return nullptr;
+
+	GList *collection_list = nullptr;
+	collect_manager_list(&collection_list, nullptr, nullptr);
+
+	auto *collection_name = static_cast<gchar *>(g_list_nth_data(collection_list, index));
+	gchar *path = collection_path(collection_name);
+	g_list_free_full(collection_list, g_free);
+
+	return path;
 }
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

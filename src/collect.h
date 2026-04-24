@@ -22,12 +22,14 @@
 #ifndef COLLECT_H
 #define COLLECT_H
 
+#include <functional>
+
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gdk/gdk.h>
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
+enum SortType : gint;
 
 struct CollectTable;
 class FileData;
@@ -38,9 +40,8 @@ struct CollectInfo
 	FileData *fd;
 	GdkPixbuf *pixbuf;
 	guint flag_mask;
+	gchar *infotext;
 };
-
-CollectInfo *collection_info_new(FileData *fd, struct stat *st, GdkPixbuf *pixbuf);
 
 void collection_info_free(CollectInfo *ci);
 
@@ -63,8 +64,8 @@ struct CollectionData
 	ThumbLoader *thumb_loader;
 	CollectInfo *thumb_info;
 
-	void (*info_updated_func)(CollectionData *, CollectInfo *, gpointer);
-	gpointer info_updated_data;
+	using InfoUpdatedFunc = std::function<void(CollectionData *, CollectInfo *)>;
+	InfoUpdatedFunc info_updated_func;
 
 	gint ref;
 
@@ -84,7 +85,7 @@ struct CollectionData
 CollectionData *collection_new(const gchar *path);
 void collection_free(CollectionData *cd);
 
-void collection_ref(CollectionData *cd);
+CollectionData *collection_ref(CollectionData *cd);
 void collection_unref(CollectionData *cd);
 
 void collection_path_changed(CollectionData *cd);
@@ -104,11 +105,8 @@ CollectInfo *collection_get_last(CollectionData *cd);
 
 void collection_set_sort_method(CollectionData *cd, SortType method);
 void collection_randomize(CollectionData *cd);
-void collection_set_update_info_func(CollectionData *cd,
-				     void (*func)(CollectionData *, CollectInfo *, gpointer), gpointer data);
 
-gboolean collection_add(CollectionData *cd, FileData *fd, gboolean sorted);
-gboolean collection_add_check(CollectionData *cd, FileData *fd, gboolean sorted, gboolean must_exist);
+gboolean collection_add(CollectionData *cd, FileData *fd, gboolean sorted, const gchar *infotext = nullptr);
 gboolean collection_insert(CollectionData *cd, FileData *fd, CollectInfo *insert_ci, gboolean sorted);
 gboolean collection_remove(CollectionData *cd, FileData *fd);
 void collection_remove_by_info_list(CollectionData *cd, GList *list);
@@ -135,8 +133,9 @@ gboolean collection_window_modified_exists();
 
 gboolean is_collection(const gchar *param);
 gchar *collection_path(const gchar *param);
-GString *collection_contents(const gchar *name, GString *contents) G_GNUC_WARN_UNUSED_RESULT;
+[[nodiscard]] GString *collection_contents(const gchar *name, GString *contents);
 GList *collection_contents_fd(const gchar *name);
+void collection_by_index_add_filelist(gint index, GList *list);
 
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

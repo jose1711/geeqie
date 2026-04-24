@@ -27,19 +27,24 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
+#include "bar-sort.h"
+#include "filedata.h"
+#include "toolbar.h"
+
+enum DirViewType : guint;
+enum FileViewType : guint;
+enum ImageSplitMode : gint;
 
 struct AnimationData;
-class FileData;
 struct FullScreenData;
 struct ImageWindow;
-struct SlideShowData;
+struct SlideShow;
 struct ViewDir;
 struct ViewFile;
 
 #define MAX_SPLIT_IMAGES 4
 
-enum LayoutLocation {
+enum LayoutLocation : int {
 	LAYOUT_HIDE   = 0,
 	LAYOUT_LEFT   = 1 << 0,
 	LAYOUT_RIGHT  = 1 << 1,
@@ -53,25 +58,6 @@ enum StartUpPath {
 	STARTUP_PATH_HOME,
 };
 
-enum SortActionType {
-	BAR_SORT_COPY = 0,
-	BAR_SORT_MOVE,
-	BAR_SORT_FILTER,
-	BAR_SORT_ACTION_COUNT
-};
-
-enum SortModeType {
-	BAR_SORT_MODE_FOLDER = 0,
-	BAR_SORT_MODE_COLLECTION,
-	BAR_SORT_MODE_COUNT
-};
-
-enum SortSelectionType {
-	BAR_SORT_SELECTION_IMAGE = 0,
-	BAR_SORT_SELECTION_SELECTED,
-	BAR_SORT_SELECTION_COUNT
-};
-
 struct LayoutOptions
 {
 	gchar *id;
@@ -82,14 +68,8 @@ struct LayoutOptions
 	DirViewType dir_view_type;
 	FileViewType file_view_type;
 
-	struct SortParams
-	{
-		SortType method;
-		gboolean ascend;
-		gboolean case_sensitive;
-	};
-	SortParams dir_view_list_sort;
-	SortParams file_view_list_sort;
+	FileData::FileList::SortSettings dir_view_list_sort;
+	FileData::FileList::SortSettings file_view_list_sort;
 
 	gboolean show_thumbnails;
 	gboolean show_marks;
@@ -130,7 +110,10 @@ struct LayoutOptions
 
 	GdkRectangle search_window;
 
-	GdkRectangle dupe_window;
+	struct {
+		GdkRectangle rect;
+		gint vdivider_pos;
+	} dupe_window;
 
 	GdkRectangle advanced_exif_window;
 
@@ -147,17 +130,13 @@ struct LayoutOptions
 	} bars_state;
 
 	gchar *home_path;
-	gchar *last_path;
 
 	StartUpPath startup_path;
 
 	gboolean animate;
 	gint workspace;
 
-	SortActionType action;
-	SortModeType mode;
-	SortSelectionType selection;
-	gchar *filter_key;
+	BarSort bar_sort;
 };
 
 struct LayoutWindow
@@ -195,6 +174,7 @@ struct LayoutWindow
 
 	ImageWindow *split_images[MAX_SPLIT_IMAGES];
 	ImageSplitMode split_mode;
+	GtkEventController *split_images_touchpad_zoom[MAX_SPLIT_IMAGES];
 	gint active_split_image;
 
 	GtkWidget *split_image_widget;
@@ -238,11 +218,12 @@ struct LayoutWindow
 
 	/* slide show */
 
-	SlideShowData *slideshow;
+	SlideShow *slideshow;
 
 	/* full screen */
 
 	FullScreenData *full_screen;
+	GtkEventController *touchpad_zoom;
 
 	/* misc */
 
@@ -291,16 +272,16 @@ void layout_status_update_image(LayoutWindow *lw);
 void layout_status_update_all(LayoutWindow *lw);
 
 GList *layout_list(LayoutWindow *lw);
-guint layout_list_count(LayoutWindow *lw, gint64 *bytes);
+guint layout_list_count(LayoutWindow *lw, gint64 *bytes = nullptr);
 FileData *layout_list_get_fd(LayoutWindow *lw, gint index);
 gint layout_list_get_index(LayoutWindow *lw, FileData *fd);
 void layout_list_sync_fd(LayoutWindow *lw, FileData *fd);
 gchar *layout_get_window_list();
 
 GList *layout_selection_list(LayoutWindow *lw);
-/* return list of pointers to int for selection */
-GList *layout_selection_list_by_index(LayoutWindow *lw);
-guint layout_selection_count(LayoutWindow *lw, gint64 *bytes);
+/* return list of indices for selection */
+std::vector<int> layout_selection_list_by_index(LayoutWindow *lw);
+guint layout_selection_count(LayoutWindow *lw, gint64 *bytes = nullptr);
 void layout_select_all(LayoutWindow *lw);
 void layout_select_none(LayoutWindow *lw);
 void layout_select_invert(LayoutWindow *lw);
@@ -319,14 +300,14 @@ void layout_marks_set(LayoutWindow *lw, gboolean enable);
 
 void layout_file_filter_set(LayoutWindow *lw, gboolean enable);
 
-void layout_sort_set_files(LayoutWindow *lw, SortType type, gboolean ascend, gboolean case_sensitive);
-gboolean layout_sort_get(LayoutWindow *lw, SortType *type, gboolean *ascend, gboolean *case_sensitive);
+void layout_sort_set_files(LayoutWindow *lw, FileData::FileList::SortSettings settings);
+gboolean layout_sort_get(LayoutWindow *lw, FileData::FileList::SortSettings &settings);
 
 gboolean layout_geometry_get_dividers(LayoutWindow *lw, gint *h, gint *v);
 
 void layout_views_set(LayoutWindow *lw, DirViewType dir_view_type, FileViewType file_view_type);
 
-void layout_views_set_sort_dir(LayoutWindow *lw, SortType method, gboolean ascend, gboolean case_sensitive);
+void layout_views_set_sort_dir(LayoutWindow *lw, FileData::FileList::SortSettings settings);
 
 void layout_status_update(LayoutWindow *lw, const gchar *text);
 

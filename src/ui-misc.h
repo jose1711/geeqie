@@ -31,6 +31,8 @@
 #include <glib.h>
 #include <gtk/gtk.h>
 
+#include "geometry.h"
+
 /* these values are per GNOME HIG */
 
 /* HIG 2.0 chapter 8 defines: */
@@ -137,8 +139,6 @@ GtkWidget *pref_spin_new_int(GtkWidget *parent_box, const gchar *text, const gch
 			     gint min, gint max, gint step,
 			     gint value, gint *value_var);
 
-void pref_link_sensitivity(GtkWidget *widget, GtkWidget *watch);
-
 void pref_signal_block_data(GtkWidget *widget, gpointer data);
 void pref_signal_unblock_data(GtkWidget *widget, gpointer data);
 
@@ -182,26 +182,12 @@ GDateTime *date_selection_get(GtkWidget *widget);
 void date_selection_time_set(GtkWidget *widget, time_t t);
 
 
-enum SizerPositionType {
-	SIZER_POS_LEFT   = 1 << 0,
-	SIZER_POS_RIGHT  = 1 << 1,
-	SIZER_POS_TOP    = 1 << 2,
-	SIZER_POS_BOTTOM = 1 << 3
-};
-
-void sizer_set_limits(GtkWidget *sizer,
-		      gint hsize_min, gint hsize_max,
-		      gint vsize_min, gint vsize_max);
-
-
 void pref_list_int_set(const gchar *group, const gchar *key, gint value);
-gboolean pref_list_int_get(const gchar *group, const gchar *key, gint *result);
+gint pref_list_int_get(const gchar *group, const gchar *key, gint fallback);
 
 
-void pref_color_button_set_cb(GtkWidget *widget, gpointer data);
-GtkWidget *pref_color_button_new(GtkWidget *parent_box,
-				 const gchar *title, GdkRGBA *color,
-				 GCallback func, gpointer data);
+GtkWidget *pref_color_button_new(GtkWidget *parent_box, const gchar *title,
+                                 const GdkRGBA *color, GdkRGBA *result);
 
 gchar *text_widget_text_pull(GtkWidget *text_widget, gboolean include_hidden_chars = FALSE);
 gchar *text_widget_text_pull_selected(GtkWidget *text_widget);
@@ -224,14 +210,24 @@ struct ActionItem
 
 std::vector<ActionItem> get_action_items();
 
-bool defined_mouse_buttons(GdkEventButton *event, gpointer data);
-
 // Copy pixbuf returned by gtk_icon_theme_load_icon() to avoid GTK+ keeping the old icon theme loaded
 GdkPixbuf *gq_gtk_icon_theme_load_icon_copy(GtkIconTheme *icon_theme, const gchar *icon_name, gint size, GtkIconLookupFlags flags);
 
-gboolean window_get_pointer_position(GdkWindow *window, GdkPoint &pos);
-GdkRectangle window_get_position_geometry(GdkWindow *window);
-GdkRectangle window_get_root_origin_geometry(GdkWindow *window);
-gboolean window_received_event(GdkWindow *window, GdkPoint event);
+gboolean widget_get_pointer_position(GtkWidget *widget, GqPoint &pos);
+GdkRectangle widget_get_position_geometry(GtkWidget *widget);
+GdkRectangle widget_get_root_origin_geometry(GtkWidget *widget);
+gboolean widget_received_event(GtkWidget *widget, GqPoint event);
+
+void widget_remove_from_parent(GtkWidget *widget);
+void widget_remove_from_parent_cb(GtkWidget *, gpointer data);
+
+void widget_input_grab(GtkWidget *widget, GdkSeatCapabilities capabilities, gboolean owner_events, GdkEventMask event_mask);
+void widget_input_ungrab(GtkWidget *widget);
+
+gboolean get_pointer_position(GtkWidget *widget, GdkDevice *device, int *x, int *y, GdkModifierType *mask);
+void get_device_position(GdkDevice *device, int &x, int &y);
+
+PangoAttrList *get_pango_attr_list(gboolean weight, gboolean scale);
+
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

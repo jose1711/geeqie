@@ -49,13 +49,14 @@ enum DupeMatchType
 	DUPE_MATCH_SIM_MED  = 1 << 7,
 	DUPE_MATCH_SIM_LOW  = 1 << 8,
 	DUPE_MATCH_SIM_CUSTOM = 1 << 9,
+	DUPE_MATCH_SIM = DUPE_MATCH_SIM_HIGH | DUPE_MATCH_SIM_MED | DUPE_MATCH_SIM_LOW | DUPE_MATCH_SIM_CUSTOM,
 	DUPE_MATCH_NAME_CI = 1 << 10,	/**< same as name, but case insensitive */
 	DUPE_MATCH_NAME_CONTENT = 1 << 11,	/**< same name, but different content */
 	DUPE_MATCH_NAME_CI_CONTENT = 1 << 12,	/**< same name - case insensitive, but different content */
 	DUPE_MATCH_ALL = 1 << 13 /**< N.B. this is used as a clamp value in rcfile.cc */
 };
 
-enum DupeSelectType
+enum DupeSelectType : guint
 {
 	DUPE_SELECT_NONE,
 	DUPE_SELECT_GROUP1,
@@ -97,7 +98,7 @@ struct DupeWindow
 	DupeMatchType match_mask;	/**< mask of things to check for match */
 
 	GtkWidget *window;
-	GtkWidget *table;
+	GtkWidget *paned;
 	GtkWidget *listview;
 	GtkWidget *combo;
 	GtkWidget *status_label;
@@ -164,8 +165,8 @@ void dupe_window_close(DupeWindow *dw);
 
 void dupe_window_add_collection(DupeWindow *dw, CollectionData *collection);
 void dupe_window_add_files(DupeWindow *dw, GList *list, gboolean recurse);
-void dupe_window_add_folder(const gchar *path);
-void dupe_window_add_folder_recurse(const gchar *path);
-void export_duplicates_data_command_line(GString *output_string);
+void dupe_window_add_folder(const gchar *path, gboolean recurse);
+
+GString *export_duplicates_data_command_line();
 #endif
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

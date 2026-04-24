@@ -39,10 +39,11 @@
 	#define gq_gtk_frame_set_shadow_type(frame, type) ;
 	#define gq_gtk_scrolled_window_new(hadjustment, vadjustment) gtk_scrolled_window_new()
 	#define gq_gtk_scrolled_window_set_shadow_type(scrolled_window, type) gtk_scrolled_window_set_has_frame(scrolled_window, TRUE)
-	#define gq_gtk_widget_destroy(widget) gtk_window_destroy(widget)
+	#define gq_gtk_widget_destroy(widget) gtk_window_destroy(GTK_WINDOW(widget))
 	#define gq_gtk_widget_queue_draw_area(widget, x, y, width, height) gtk_widget_queue_draw(widget);
 	#define gq_gtk_widget_show_all(widget) ;
 	#define gq_gtk_window_move(window, x, y) ;
+	#define gq_gtk_window_resize(window, width, height) gtk_window_set_default_size(window, width, height)
 	#define gq_gtk_window_set_keep_above(window, setting) ;
 	#define gq_gtk_window_set_position(window, position) ;
 	#define gq_gtk_window_fullscreen_on_monitor(window, monitor) ;
@@ -56,12 +57,28 @@
 	#define gq_gtk_widget_queue_draw_area(widget, x, y, width, height) gtk_widget_queue_draw_area(widget, x, y, width, height);
 	#define gq_gtk_widget_show_all(widget) gtk_widget_show_all(widget)
 	#define gq_gtk_window_move(window, x, y) gtk_window_move(window, x, y)
+	#define gq_gtk_window_resize(window, width, height)gtk_window_resize(window, width, height)
 	#define gq_gtk_window_set_keep_above(window, setting) gtk_window_set_keep_above(window, setting)
 	#define gq_gtk_window_set_position(window, position) gtk_window_set_position(window, position)
 	#define gq_gtk_window_fullscreen_on_monitor(window, screen, monitor) gtk_window_fullscreen_on_monitor(window, screen, monitor)
 #endif
 
 void gq_gtk_container_add(GtkWidget *container, GtkWidget *widget);
+GtkWidget *gq_gtk_image_new_from_stock(const gchar *stock_id, GtkIconSize size);
+GtkWidget *gq_gtk_bin_get_child(GtkWidget *widget);
+GList *gq_gtk_widget_get_children(GtkWidget *widget);
+void gq_gtk_viewport_set_shadow_type(GtkWidget *viewport, int type);
+void gq_drag_g_signal_connect(GObject *instance, const gchar *detailed_signal, GCallback c_handler, gpointer data);
+void gq_drag_g_signal_swapped(GObject *instance, const gchar *detailed_signal, GCallback c_handler, gpointer data);
+void gq_gtk_drag_dest_unset(GtkWidget *widget);
+
+#if HAVE_GTK4
+void gq_gtk_drag_source_set(GtkWidget *widget, GdkModifierType start_button_mask, gpointer, gint n_targets, GdkDragAction actions);
+void gq_gtk_drag_dest_set(GtkWidget *widget, gpointer, gpointer, gint n_targets, GdkDragAction actions);
+#else
+void gq_gtk_drag_source_set(GtkWidget *widget, GdkModifierType start_button_mask, const GtkTargetEntry *targets, gint n_targets, GdkDragAction actions);
+void gq_gtk_drag_dest_set(GtkWidget *widget, GtkDestDefaults flags, const GtkTargetEntry *targets, gint n_targets, GdkDragAction actions);
+#endif
 
 #endif /* COMPAT_H */
 /* vim: set shiftwidth=8 softtabstop=0 cindent cinoptions={1s: */

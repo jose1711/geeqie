@@ -41,7 +41,6 @@
 #include "metadata.h"
 #include "options.h"
 #include "pixbuf-util.h"
-#include "typedefs.h"
 #include "ui-fileops.h"
 
 struct ExifData;
@@ -282,7 +281,7 @@ static void thumb_loader_std_save(ThumbLoaderStd *tl, GdkPixbuf *pixbuf)
 		}
 	else
 		{
-		g_object_ref(G_OBJECT(pixbuf));
+		g_object_ref(pixbuf);
 		fail = FALSE;
 		}
 
@@ -362,37 +361,31 @@ void thumb_loader_std_calibrate_pixbuf(FileData *fd, GdkPixbuf *pixbuf)
 	if (!options->thumbnails.use_color_management) return;
 
 	ColorManProfileType color_profile_from_image = COLOR_PROFILE_NONE;
-	guint profile_len;
-	g_autofree guchar *profile = exif_get_color_profile(fd, profile_len, color_profile_from_image);
+	ColorManMemData profile = exif_get_color_profile(fd, color_profile_from_image);
 
 	if (color_profile_from_image == COLOR_PROFILE_NONE) return;
 
 	// transform image, we always use sRGB as target for thumbnails
 	constexpr ColorManProfileType screen_type = COLOR_PROFILE_SRGB;
 
-	const gint sw = gdk_pixbuf_get_width(pixbuf);
-	const gint sh = gdk_pixbuf_get_height(pixbuf);
-
-	g_autofree ColorMan *cm = nullptr;
-	if (profile)
+	std::unique_ptr<ColorMan> cm = nullptr;
+	if (profile.ptr)
 		{
-		cm = color_man_new_embedded(nullptr, pixbuf,
-		                            profile, profile_len,
-		                            screen_type, nullptr, nullptr, 0);
+		cm.reset(color_man_new_embedded(pixbuf, profile,
+		                                screen_type, nullptr, {}));
 		}
 	else
 		{
-		constexpr ColorManProfileType input_type = COLOR_PROFILE_MEM;
-		const gchar *input_file = nullptr;
-
-		cm = color_man_new(nullptr, pixbuf,
-		                   input_type, input_file,
-		                   screen_type, nullptr, nullptr, 0);
+		cm.reset(color_man_new(pixbuf, COLOR_PROFILE_MEM, nullptr,
+		                       screen_type, nullptr, {}));
 		}
 
 	if(cm)
 		{
-		color_man_correct_region(cm, cm->pixbuf, 0, 0, sw, sh);
+		const gint sw = gdk_pixbuf_get_width(pixbuf);
+		const gint sh = gdk_pixbuf_get_height(pixbuf);
+
+		cm->correct_region(pixbuf, {0, 0, sw, sh});
 		}
 }
 
@@ -409,7 +402,7 @@ static GdkPixbuf *thumb_loader_std_finish(ThumbLoaderStd *tl, GdkPixbuf *pixbuf,
 		{
 		if (!tl->fd->exif_orientation)
 			{
-			if (g_strcmp0(tl->fd->format_name, "heif") != 0)
+			if (tl->fd->supports_exif_orientation())
 				{
 				tl->fd->exif_orientation = metadata_read_int(tl->fd, ORIENTATION_KEY, EXIF_ORIENTATION_TOP_LEFT);
 				}
@@ -455,12 +448,11 @@ static GdkPixbuf *thumb_loader_std_finish(ThumbLoaderStd *tl, GdkPixbuf *pixbuf,
 				                        thumb_w, thumb_h))
 					{
 					pixbuf_thumb = gdk_pixbuf_scale_simple(pixbuf, thumb_w, thumb_h,
-									       static_cast<GdkInterpType>(options->thumbnails.quality));
+					                                       options->thumbnails.quality);
 					}
 				else
 					{
-					pixbuf_thumb = pixbuf;
-					g_object_ref(G_OBJECT(pixbuf_thumb));
+					pixbuf_thumb = g_object_ref(pixbuf);
 					}
 
 				/* do not save the thumbnail if the source file has changed meanwhile -
@@ -491,8 +483,7 @@ static GdkPixbuf *thumb_loader_std_finish(ThumbLoaderStd *tl, GdkPixbuf *pixbuf,
 
 	if (sw <= tl->requested_width && sh <= tl->requested_height)
 		{
-		result = pixbuf;
-		g_object_ref(result);
+		result = g_object_ref(pixbuf);
 		}
 	else
 		{
@@ -510,12 +501,11 @@ static GdkPixbuf *thumb_loader_std_finish(ThumbLoaderStd *tl, GdkPixbuf *pixbuf,
 		                        thumb_w, thumb_h))
 			{
 			result = gdk_pixbuf_scale_simple(pixbuf, thumb_w, thumb_h,
-							 static_cast<GdkInterpType>(options->thumbnails.quality));
+			                                 options->thumbnails.quality);
 			}
 		else
 			{
-			result = pixbuf;
-			g_object_ref(result);
+			result = g_object_ref(pixbuf);
 			}
 		}
 
@@ -581,7 +571,7 @@ static void thumb_loader_std_done_cb(ImageLoader *il, gpointer data)
 	pixbuf = image_loader_get_pixbuf(tl->il);
 	if (!pixbuf)
 		{
-		DEBUG_1("...but no pixbuf");
+		DEBUG_1("…but no pixbuf");
 		thumb_loader_std_error_cb(il, data);
 		return;
 		}
@@ -761,8 +751,7 @@ GdkPixbuf *thumb_loader_std_get_pixbuf(ThumbLoaderStd *tl)
 
 	if (tl && tl->fd && tl->fd->thumb_pixbuf)
 		{
-		pixbuf = tl->fd->thumb_pixbuf;
-		g_object_ref(pixbuf);
+		pixbuf = g_object_ref(tl->fd->thumb_pixbuf);
 		}
 	else
 		{
@@ -794,17 +783,11 @@ static void thumb_loader_std_thumb_file_validate_free(ThumbValidate *tv)
 
 void thumb_loader_std_thumb_file_validate_cancel(ThumbLoaderStd *tl)
 {
-	ThumbValidate *tv;
-
 	if (!tl) return;
 
-	tv = static_cast<ThumbValidate *>(tl->data);
+	auto *tv = static_cast<ThumbValidate *>(tl->data);
 
-	if (tv->idle_id)
-		{
-		g_source_remove(tv->idle_id);
-		tv->idle_id = 0;
-		}
+	g_clear_handle_id(&tv->idle_id, g_source_remove);
 
 	thumb_loader_std_thumb_file_validate_free(tv);
 }

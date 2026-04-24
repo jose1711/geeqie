@@ -22,14 +22,18 @@
 #ifndef PIXBUF_RENDERER_H
 #define PIXBUF_RENDERER_H
 
+#include <functional>
+#include <optional>
+
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gdk/gdk.h>
 #include <glib-object.h>
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
+#include "geometry.h"
 
+struct GqColor;
 struct PixbufRenderer;
 
 #define TYPE_PIXBUF_RENDERER		(pixbuf_renderer_get_type())
@@ -71,26 +75,68 @@ struct PixbufRenderer;
 #define ROUND_DOWN(A,B) ((gint)(((A))/(B))*(B))
 
 
-using PixbufRendererTileRequestFunc = gint (*)(PixbufRenderer *, gint, gint, gint, gint, GdkPixbuf *, gpointer);
-using PixbufRendererTileDisposeFunc = void (*)(PixbufRenderer *, gint, gint, gint, gint, GdkPixbuf *, gpointer);
-
-using PixbufRendererPostProcessFunc = void (*)(PixbufRenderer *, GdkPixbuf **, gint, gint, gint, gint, gpointer);
-
-enum ImageRenderType {
-	TILE_RENDER_NONE = 0, /**< do nothing */
-	TILE_RENDER_AREA, /**< render an area of the tile */
-	TILE_RENDER_ALL /**< render the whole tile */
-};
-
 enum OverlayRendererFlags {
 	OVL_NORMAL 	= 0,
 	OVL_RELATIVE 	= 1 << 0, /**< x,y coordinates are relative, negative values start bottom right */
 	/* OVL_HIDE_ON_SCROLL = 1 << 1*/ /**< hide temporarily when scrolling (not yet implemented) */
 };
 
+enum PixbufRendererStereoMode {
+	PR_STEREO_NONE             = 0,	  /**< do nothing */
+	PR_STEREO_DUAL             = 1 << 0, /**< independent stereo buffers, for example nvidia opengl */
+	PR_STEREO_FIXED            = 1 << 1,  /**< custom position */
+	PR_STEREO_HORIZ            = 1 << 2,  /**< side by side */
+	PR_STEREO_VERT             = 1 << 3,  /**< above below */
+	PR_STEREO_RIGHT            = 1 << 4,  /**< render right buffer */
+	PR_STEREO_ANAGLYPH_RC      = 1 << 5,  /**< anaglyph red-cyan */
+	PR_STEREO_ANAGLYPH_GM      = 1 << 6,  /**< anaglyph green-magenta */
+	PR_STEREO_ANAGLYPH_YB      = 1 << 7,  /**< anaglyph yellow-blue */
+	PR_STEREO_ANAGLYPH_GRAY_RC = 1 << 8,  /**< anaglyph gray red-cyan*/
+	PR_STEREO_ANAGLYPH_GRAY_GM = 1 << 9,  /**< anaglyph gray green-magenta */
+	PR_STEREO_ANAGLYPH_GRAY_YB = 1 << 10, /**< anaglyph gray yellow-blue */
+	PR_STEREO_ANAGLYPH_DB_RC   = 1 << 11, /**< anaglyph dubois red-cyan */
+	PR_STEREO_ANAGLYPH_DB_GM   = 1 << 12, /**< anaglyph dubois green-magenta */
+	PR_STEREO_ANAGLYPH_DB_YB   = 1 << 13, /**< anaglyph dubois yellow-blue */
+	PR_STEREO_ANAGLYPH         = PR_STEREO_ANAGLYPH_RC |
+	                             PR_STEREO_ANAGLYPH_GM |
+	                             PR_STEREO_ANAGLYPH_YB |
+	                             PR_STEREO_ANAGLYPH_GRAY_RC |
+	                             PR_STEREO_ANAGLYPH_GRAY_GM |
+	                             PR_STEREO_ANAGLYPH_GRAY_YB |
+	                             PR_STEREO_ANAGLYPH_DB_RC |
+	                             PR_STEREO_ANAGLYPH_DB_GM |
+	                             PR_STEREO_ANAGLYPH_DB_YB, /**< anaglyph mask */
+
+	PR_STEREO_MIRROR_LEFT      = 1 << 14, /**< mirror */
+	PR_STEREO_FLIP_LEFT        = 1 << 15, /**< flip */
+
+	PR_STEREO_MIRROR_RIGHT     = 1 << 16, /**< mirror */
+	PR_STEREO_FLIP_RIGHT       = 1 << 17, /**< flip */
+
+	PR_STEREO_MIRROR           = PR_STEREO_MIRROR_LEFT | PR_STEREO_MIRROR_RIGHT, /**< mirror mask*/
+	PR_STEREO_FLIP             = PR_STEREO_FLIP_LEFT | PR_STEREO_FLIP_RIGHT, /**< flip mask*/
+	PR_STEREO_SWAP             = 1 << 18,  /**< swap left and right buffers */
+	PR_STEREO_TEMP_DISABLE     = 1 << 19,  /**< temporarily disable stereo mode if source image is not stereo */
+	PR_STEREO_HALF             = 1 << 20
+};
+
+enum ScrollReset : guint {
+	TOPLEFT  = 0,
+	CENTER   = 1,
+	NOCHANGE = 2,
+	COUNT /**< Keep it last */
+};
+
+enum StereoPixbufData : gint {
+	STEREO_PIXBUF_DEFAULT  = 0,
+	STEREO_PIXBUF_SBS      = 1,
+	STEREO_PIXBUF_CROSS    = 2,
+	STEREO_PIXBUF_NONE     = 3
+};
+
 struct RendererFuncs
 {
-	void (*area_changed)(void *renderer, gint src_x, gint src_y, gint src_w, gint src_h); /**< pixbuf area changed */
+	void (*area_changed)(void *renderer, GdkRectangle src); /**< pixbuf area changed */
 	void (*invalidate_region)(void *renderer, GdkRectangle region);
 	void (*scroll)(void *renderer, gint x_off, gint y_off); /**< scroll */
 	void (*update_viewport)(void *renderer); /**< window / wiewport / border color has changed */
@@ -126,8 +172,7 @@ struct PixbufRenderer
 	gint x_offset;		/**< offset of image start (non-zero when viewport < window) */
 	gint y_offset;
 
-	gint x_mouse; /**< coordinates of the mouse taken from GtkEvent */
-	gint y_mouse;
+	GqPoint mouse; /**< coordinates of the mouse taken from GtkEvent */
 
 	gint vis_width;		/**< dimensions of visible part of image */
 	gint vis_height;
@@ -184,13 +229,13 @@ struct PixbufRenderer
 	gint source_tile_width;
 	gint source_tile_height;
 
-	PixbufRendererTileRequestFunc func_tile_request;
-	PixbufRendererTileDisposeFunc func_tile_dispose;
+	using TileRequestFunc = std::function<gboolean(PixbufRenderer *, gint, gint, gint, gint, GdkPixbuf *)>;
+	TileRequestFunc func_tile_request;
+	using TileDisposeFunc = std::function<void(PixbufRenderer *, gint, gint, gint, gint, GdkPixbuf *)>;
+	TileDisposeFunc func_tile_dispose;
 
-	gpointer func_tile_data;
-
-	PixbufRendererPostProcessFunc func_post_process;
-	gpointer post_process_user_data;
+	using PostProcessFunc = std::function<void(PixbufRenderer *, GdkPixbuf **, gint, gint, gint, gint)>;
+	PostProcessFunc func_post_process;
 	gint post_process_slow;
 
 	gboolean delay_flip;
@@ -213,12 +258,9 @@ struct PixbufRenderer
 
 	StereoPixbufData stereo_data;
 	gboolean stereo_temp_disable;
-	gint stereo_fixed_width;
-	gint stereo_fixed_height;
-	gint stereo_fixed_x_left;
-	gint stereo_fixed_y_left;
-	gint stereo_fixed_x_right;
-	gint stereo_fixed_y_right;
+	GqSize stereo_fixed_size;
+	GqPoint stereo_fixed_left;
+	GqPoint stereo_fixed_right;
 
 	RendererFuncs *renderer;
 	RendererFuncs *renderer2;
@@ -259,21 +301,20 @@ void pixbuf_renderer_set_orientation(PixbufRenderer *pr, gint orientation);
 
 void pixbuf_renderer_set_stereo_data(PixbufRenderer *pr, StereoPixbufData stereo_data);
 
-void pixbuf_renderer_set_post_process_func(PixbufRenderer *pr, PixbufRendererPostProcessFunc func, gpointer user_data, gboolean slow);
+void pixbuf_renderer_set_post_process_func(PixbufRenderer *pr, const PixbufRenderer::PostProcessFunc &func, gboolean slow);
 
 void pixbuf_renderer_set_tiles(PixbufRenderer *pr, gint width, gint height,
-			       gint tile_width, gint tile_height, gint cache_size,
-			       PixbufRendererTileRequestFunc func_request,
-			       PixbufRendererTileDisposeFunc func_dispose,
-			       gpointer user_data,
-			       gdouble zoom);
+                               gint tile_width, gint tile_height, gint cache_size,
+                               const PixbufRenderer::TileRequestFunc &func_request,
+                               const PixbufRenderer::TileDisposeFunc &func_dispose,
+                               gdouble zoom);
 void pixbuf_renderer_set_tiles_size(PixbufRenderer *pr, gint width, gint height);
 gint pixbuf_renderer_get_tiles(PixbufRenderer *pr);
 
 void pixbuf_renderer_move(PixbufRenderer *pr, PixbufRenderer *source);
 void pixbuf_renderer_copy(PixbufRenderer *pr, PixbufRenderer *source);
 
-void pixbuf_renderer_area_changed(PixbufRenderer *pr, gint x, gint y, gint width, gint height);
+void pixbuf_renderer_area_changed(PixbufRenderer *pr, GdkRectangle area);
 
 /* scrolling */
 
@@ -281,7 +322,7 @@ void pixbuf_renderer_scroll(PixbufRenderer *pr, gint x, gint y);
 void pixbuf_renderer_scroll_to_point(PixbufRenderer *pr, gint x, gint y,
 				     gdouble x_align, gdouble y_align);
 
-void pixbuf_renderer_get_scroll_center(PixbufRenderer *pr, gdouble *x, gdouble *y);
+void pixbuf_renderer_get_scroll_center(PixbufRenderer *pr, gdouble &x, gdouble &y);
 void pixbuf_renderer_set_scroll_center(PixbufRenderer *pr, gdouble x, gdouble y);
 /* zoom */
 
@@ -296,31 +337,28 @@ void pixbuf_renderer_zoom_set_limits(PixbufRenderer *pr, gdouble min, gdouble ma
 
 /* sizes */
 
-gboolean pixbuf_renderer_get_image_size(PixbufRenderer *pr, gint *width, gint *height);
-gboolean pixbuf_renderer_get_scaled_size(PixbufRenderer *pr, gint *width, gint *height);
+gboolean pixbuf_renderer_get_image_size(PixbufRenderer *pr, gint &width, gint &height);
 
-gboolean pixbuf_renderer_get_visible_rect(PixbufRenderer *pr, GdkRectangle *rect);
+gboolean pixbuf_renderer_get_visible_rect(PixbufRenderer *pr, GdkRectangle &rect);
 
-void pixbuf_renderer_set_color(PixbufRenderer *pr, GdkRGBA *color);
+void pixbuf_renderer_set_color(PixbufRenderer *pr, const GdkRGBA &color);
 
 /* overlay */
 
 gint pixbuf_renderer_overlay_add(PixbufRenderer *pr, GdkPixbuf *pixbuf, gint x, gint y,
 				 OverlayRendererFlags flags);
 void pixbuf_renderer_overlay_set(PixbufRenderer *pr, gint id, GdkPixbuf *pixbuf, gint x, gint y);
-gboolean pixbuf_renderer_overlay_get(PixbufRenderer *pr, gint id, GdkPixbuf **pixbuf, gint *x, gint *y);
 void pixbuf_renderer_overlay_remove(PixbufRenderer *pr, gint id);
 
-gboolean pixbuf_renderer_get_mouse_position(PixbufRenderer *pr, gint *x_pixel, gint *y_pixel);
+gboolean pixbuf_renderer_get_mouse_position(PixbufRenderer *pr, GqPoint &pixel);
 
-gboolean pixbuf_renderer_get_pixel_colors(PixbufRenderer *pr, gint x_pixel, gint y_pixel,
-	 				gint *r_mouse, gint *g_mouse, gint *b_mouse, gint *a_mouse);
+std::optional<GqColor> pixbuf_renderer_get_pixel_colors(PixbufRenderer *pr, GqPoint pixel);
 
-void pixbuf_renderer_set_size_early(PixbufRenderer *pr, guint width, guint height);
+void pixbuf_renderer_set_size_early(PixbufRenderer *pr, gint width, gint height);
 
 /* stereo */
 void pixbuf_renderer_stereo_set(PixbufRenderer *pr, gint stereo_mode);
-void pixbuf_renderer_stereo_fixed_set(PixbufRenderer *pr, gint width, gint height, gint x1, gint y1, gint x2, gint y2);
+void pixbuf_renderer_stereo_fixed_set(PixbufRenderer *pr, GqSize size, GqPoint left, GqPoint right);
 
 /**
  * @struct SourceTile

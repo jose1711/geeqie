@@ -21,12 +21,19 @@
 #ifndef OPTIONS_H
 #define OPTIONS_H
 
-#include <cairo.h>
+#include <string>
+#include <vector>
+
 #include <gdk/gdk.h>
 #include <glib.h>
 
-#include "typedefs.h"
+#include "filefilter.h"
+#include "geometry.h"
+#include "gq-color.h"
+#include "main-defines.h"
 
+enum DupeSelectType : guint;
+enum ScrollReset : guint;
 enum TextPosition : gint;
 
 #define COLOR_PROFILE_INPUTS 4
@@ -42,6 +49,12 @@ enum DnDAction {
 	DND_ACTION_MOVE
 };
 
+enum ClipboardSelection {
+	CLIPBOARD_PRIMARY   = 0,
+	CLIPBOARD_CLIPBOARD = 1,
+	CLIPBOARD_BOTH      = 2
+};
+
 enum RectangleDrawAspectRatio {
 	RECTANGLE_DRAW_ASPECT_RATIO_NONE = 0,
 	RECTANGLE_DRAW_ASPECT_RATIO_ONE_ONE,
@@ -55,6 +68,12 @@ enum OverlayScreenDisplaySelectedTab {
 	OVERLAY_SCREEN_DISPLAY_2,
 	OVERLAY_SCREEN_DISPLAY_3,
 	OVERLAY_SCREEN_DISPLAY_4
+};
+
+enum ZoomMode {
+	ZOOM_RESET_ORIGINAL	= 0,
+	ZOOM_RESET_FIT_WINDOW	= 1,
+	ZOOM_RESET_NONE		= 2
 };
 
 enum ZoomStyle {
@@ -75,6 +94,7 @@ struct ConfOptions
 	gchar *image_l_click_video_editor;
 	gboolean show_icon_names;
 	gboolean show_star_rating;
+	gboolean show_collection_infotext;
 	gboolean draw_rectangle;
 	gboolean show_predefined_keyword_tree;
 	gboolean overunderexposed;
@@ -93,7 +113,7 @@ struct ConfOptions
 	guint duplicates_similarity_threshold;
 	guint duplicates_match;
 	gboolean duplicates_thumbnails;
-	guint duplicates_select_type;
+	DupeSelectType duplicates_select_type;
 	gboolean rot_invariant_sim;
 	gboolean sort_totals;
 
@@ -101,7 +121,7 @@ struct ConfOptions
 	gint recent_folder_image_list_maxsize;
 	gint dnd_icon_size;
 	DnDAction dnd_default_action;
-	gint clipboard_selection;
+	ClipboardSelection clipboard_selection;
 	RectangleDrawAspectRatio rectangle_draw_aspect_ratio;
 
 	gboolean save_window_positions;
@@ -199,7 +219,7 @@ struct ConfOptions
 		ZoomMode zoom_mode;
 		gboolean zoom_2pass;
 		gboolean zoom_to_fit_allow_expand;
-		guint zoom_quality;
+		GdkInterpType zoom_quality;
 		gint zoom_increment;	/**< 100 is 1.0, 5 is 0.05, 200 is 2.0, etc. */
 		ZoomStyle zoom_style;
 
@@ -220,7 +240,7 @@ struct ConfOptions
 		gboolean cache_into_dirs;
 		gboolean use_xvpics;
 		gboolean spec_standard;
-		guint quality;
+		GdkInterpType quality;
 		gboolean use_exif;
 		gboolean use_color_management;
 		gboolean use_ft_metadata;
@@ -230,6 +250,7 @@ struct ConfOptions
 	/* file filtering */
 	struct {
 		gboolean show_hidden_files;
+		gboolean dot_prefix_hidden_files;
 		gboolean show_parent_directory;
 		gboolean show_dot_directory;
 		gboolean disable_file_extension_checks;
@@ -268,46 +289,21 @@ struct ConfOptions
 		gint screen;
 		gboolean clean_flip;
 		gboolean disable_saver;
-		gboolean above;
 	} fullscreen;
 
 	/* image overlay */
-	struct {
+	struct ImageOverlay {
 		gchar *template_string;
 		gint x;
 		gint y;
-		guint16 text_red;
-		guint16 text_green;
-		guint16 text_blue;
-		guint16 text_alpha;
-		guint16 background_red;
-		guint16 background_green;
-		guint16 background_blue;
-		guint16 background_alpha;
+		GqColor text_color;
+		GqColor background;
 		gchar *font;
 	} image_overlay;
 
-	struct {
-		gchar *template_string[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		gint x[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		gint y[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 text_red[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 text_green[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 text_blue[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 text_alpha[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 background_red[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 background_green[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 background_blue[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		guint16 background_alpha[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-		gchar *font[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
-	} image_overlay_n;
+	ImageOverlay image_overlay_n[OVERLAY_SCREEN_DISPLAY_PROFILE_COUNT];
 
 	OverlayScreenDisplaySelectedTab overlay_screen_display_selected_profile;
-
-	/* properties dialog */
-	struct {
-		gchar *tabs_order;
-	} properties;
 
 	/* color profiles */
 	struct {
@@ -320,14 +316,6 @@ struct ConfOptions
 		gboolean use_x11_screen_profile;
 		gint render_intent;
 	} color_profile;
-
-	/* Helpers programs */
-	struct {
-		struct {
-			gchar *command_name;
-			gchar *command_line;
-		} html_browser;
-	} helpers;
 
 	/* Metadata */
 	struct {
@@ -358,9 +346,9 @@ struct ConfOptions
 		gint mode;
 		gint fsmode;
 		gboolean enable_fsmode;
-		gint fixed_w, fixed_h;
-		gint fixed_x1, fixed_y1;
-		gint fixed_x2, fixed_y2;
+		GqSize fixed_size;
+		GqPoint fixed_left;
+		GqPoint fixed_right;
 		/**
 		 * @struct ModeOptions
 		 * options in this struct are packed to mode and fsmode entries
@@ -398,7 +386,7 @@ struct ConfOptions
 	/* log window */
 	struct {
 		gboolean paused;
-		gboolean line_wrap;
+		bool line_wrap;
 		gboolean timer_data;
 		gchar *action; /** Used with F1 key */
 	} log_window;
@@ -443,13 +431,14 @@ struct ConfOptions
 	gchar *mouse_button_9; /**< user-definable mouse buttons */
 
 	gboolean class_filter[FILE_FORMAT_CLASSES]; /**< class file filter */
+	guint rating_filter; /**< rating file filter */
 
 	gboolean read_metadata_in_idle;
 
 	gboolean disable_gpu; /**< GPU - see main.cc */
 	gboolean override_disable_gpu; /**< GPU - see main.cc */
 
-	GList *disabled_plugins;
+	std::vector<std::string> disabled_plugins;
 };
 
 struct CommandLine

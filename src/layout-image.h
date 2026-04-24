@@ -22,22 +22,31 @@
 #ifndef LAYOUT_IMAGE_H
 #define LAYOUT_IMAGE_H
 
+#include <optional>
+
 #include <glib.h>
 #include <gtk/gtk.h>
 
-#include "typedefs.h"
-
+enum AlterType : gint;
 enum NotifyType : gint;
+enum StereoPixbufData : gint;
 
 struct CollectInfo;
 struct CollectionData;
+struct ColorManStatus;
 class FileData;
 struct LayoutWindow;
 
+enum ImageSplitMode : gint {
+	SPLIT_NONE = 0,
+	SPLIT_VERT,
+	SPLIT_HOR,
+	SPLIT_TRIPLE,
+	SPLIT_QUAD,
+};
+
 GtkWidget *layout_image_new(LayoutWindow *lw, gint i);
 void layout_image_activate(LayoutWindow *lw, gint i, gboolean force);
-GtkWidget *layout_image_setup_split_none(LayoutWindow *lw);
-GtkWidget *layout_image_setup_split_hv(LayoutWindow *lw, gboolean horizontal);
 GtkWidget *layout_image_setup_split(LayoutWindow *lw, ImageSplitMode mode);
 
 void layout_image_set_fd(LayoutWindow *lw, FileData *fd);
@@ -52,7 +61,7 @@ void layout_image_color_profile_set(LayoutWindow *lw, gint input_type, gboolean 
 gboolean layout_image_color_profile_get(LayoutWindow *lw, gint &input_type, gboolean &use_image);
 void layout_image_color_profile_set_use(LayoutWindow *lw, gint enable);
 gboolean layout_image_color_profile_get_use(LayoutWindow *lw);
-gboolean layout_image_color_profile_get_status(LayoutWindow *lw, gchar **image_profile, gchar **screen_profile);
+std::optional<ColorManStatus> layout_image_color_profile_get_status(LayoutWindow *lw);
 
 
 const gchar *layout_image_get_path(LayoutWindow *lw);
@@ -74,8 +83,8 @@ void layout_image_set_ignore_alpha(LayoutWindow *lw, gboolean ignore_alpha);
 
 void layout_image_rating(LayoutWindow *lw, const gchar *rating);
 
-gint layout_image_stereo_pixbuf_get(LayoutWindow *lw);
-void layout_image_stereo_pixbuf_set(LayoutWindow *lw, gint stereo_mode);
+StereoPixbufData layout_image_stereo_pixbuf_get(LayoutWindow *lw);
+void layout_image_stereo_pixbuf_set(LayoutWindow *lw, StereoPixbufData stereo_mode);
 
 void layout_image_next(LayoutWindow *lw);
 void layout_image_prev(LayoutWindow *lw);
@@ -96,7 +105,7 @@ void layout_image_slideshow_start_from_list(LayoutWindow *lw, GList *list);
 void layout_image_slideshow_stop(LayoutWindow *lw);
 void layout_image_slideshow_toggle(LayoutWindow *lw);
 gboolean layout_image_slideshow_active(LayoutWindow *lw);
-gboolean layout_image_slideshow_pause_toggle(LayoutWindow *lw);
+void layout_image_slideshow_pause_toggle(LayoutWindow *lw);
 gboolean layout_image_slideshow_paused(LayoutWindow *lw);
 
 void layout_image_animate_toggle(LayoutWindow *lw);
